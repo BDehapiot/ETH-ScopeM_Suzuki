@@ -138,11 +138,11 @@ if __name__ == "__main__":
         blending="additive", colormap="bop blue",
         )
     viewer.add_image(
-        msk_cyto, name="mask_cytoplasm", scale=scale, visible=0,
+        msk_cyto, name="cytoplasm mask", scale=scale, visible=0,
         rendering="attenuated_mip", attenuation=0.5, colormap="bop orange",
         )
     viewer.add_image(
-        msk_nuclei, name="mask_nuclei", scale=scale, visible=0,
+        msk_nuclei, name="nuclei mask", scale=scale, visible=0,
         rendering="attenuated_mip", attenuation=0.5, colormap="bop blue",
         )
     
