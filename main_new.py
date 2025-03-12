@@ -17,6 +17,7 @@ from bdtools.norm import norm_pct
 # skimage
 from skimage.transform import rescale
 from skimage.filters.rank import median
+from skimage.filters import threshold_otsu
 from skimage.morphology import ball, h_maxima
 
 # Qt
@@ -40,6 +41,7 @@ from qtpy.QtWidgets import (
 # Procedure
 overwrite = {
     "preprocess" : 0,
+    "process" : 0,
     }
 
 # Parameters
@@ -49,6 +51,16 @@ rf = 0.5
 
 data_path = Path("D:\local_Suzuki\data")
 stk_paths = list(data_path.glob("*.nd2"))
+
+#%% Function(s) ---------------------------------------------------------------
+
+def save(stk, path, voxsize):
+    if stk.ndim == 3: axes = "ZYX"
+    if stk.ndim == 4: axes = "ZCYX"
+    resolution = (1 / voxsize, 1 / voxsize)
+    metadata = {"axes" : axes, "spacing" : voxsize, "unit" : "um"}
+    tifffile.imwrite(
+        path, stk, imagej=True, resolution=resolution, metadata=metadata)
 
 #%% Function : preprocess() ---------------------------------------------------
 
@@ -75,11 +87,7 @@ def preprocess(path, rf=0.5):
         stk = np.flip(stk, axis=0)
         
         # Adjust voxSize
-        voxsize1 = (
-            voxsize0[0] / rf, 
-            voxsize0[1] / (rfi * rf),
-            voxsize0[2] / (rfi * rf),
-            )
+        voxsize = voxsize0[0] / rf
         
         # Setup directory 
         dir_path = Path(data_path / path.stem)
@@ -92,23 +100,41 @@ def preprocess(path, rf=0.5):
         dir_path.mkdir(exist_ok=True)
         
         # Save       
-        stk_name = path.stem + f"_{voxsize1[0]}_stk.tif"
-        resolution = (1 / voxsize1[1], 1 / voxsize1[2])
-        metadata = {"axes" : "ZCYX", "spacing" : voxsize1[0], "unit" : "um"}
-        tifffile.imwrite(
-            dir_path / stk_name, stk, 
-            imagej=True, resolution=resolution, metadata=metadata
-            )
+        stk_path = dir_path / (path.stem + f"_{voxsize}_stk.tif")
+        save(stk, stk_path, voxsize)
 
 #%% Function : process() ------------------------------------------------------
 
 def process(paths):
-
-    # global cyts, ncls   
     
-    def _process(stk):
-        med = median(stk, footprint=ball(5))
-        return med
+    global cyts, ncls, cyts_med, ncls_med, cyts_msk, ncls_msk, cyts_thresh, ncls_thresh
+    
+    def _process(i, cyt, ncl):
+        
+        # Median filter
+        cyt_med = median(cyt.copy(), footprint=ball(5))
+        ncl_med = median(ncl.copy(), footprint=ball(5))
+                
+        # Get masks
+        cyt_msk = cyt_med > cyts_thresh
+        ncl_msk = ncl_med > ncls_thresh
+        # cyt_msk = remove_small_objects(cyt_msk, min_size=1e4)
+        # ncl_msk = remove_small_objects(ncl_msk, min_size=1e4)
+        
+        # Save
+        dir_path = Path(data_path / paths[i].stem)
+        stk_path = list(dir_path.glob("*_stk.tif"))[0]
+        cyt_med_path = str(stk_path).replace("stk", "cyt_med")
+        ncl_med_path = str(stk_path).replace("stk", "ncl_med")
+        cyt_msk_path = str(stk_path).replace("stk", "cyt_msk")
+        ncl_msk_path = str(stk_path).replace("stk", "ncl_msk")
+        voxsize = float(str(stk_path.stem).split("_")[1])
+        save(cyt_med, cyt_med_path, voxsize)
+        save(ncl_med, ncl_med_path, voxsize)
+        save(cyt_msk.astype("uint8"), cyt_msk_path, voxsize)
+        save(ncl_msk.astype("uint8"), ncl_msk_path, voxsize)
+        
+        return cyt_med, ncl_med, cyt_msk, ncl_msk
         
     # Load data
     cyts, ncls = [], []
@@ -125,19 +151,19 @@ def process(paths):
     cyts = [(cyt * 255).astype("uint8") for cyt in cyts]
     ncls = [(ncl * 255).astype("uint8") for ncl in ncls]
     
+    # Get threshold
+    cyts_thresh = threshold_otsu(np.concatenate(cyts, axis=0))
+    ncls_thresh = threshold_otsu(np.concatenate(ncls, axis=0))
     
-    cyts_med = Parallel(n_jobs=-1)(
-        delayed(_process)(cyt) 
-        for cyt in cyts
-        )
-    ncls_med = Parallel(n_jobs=-1)(
-        delayed(_process)(ncl) 
-        for ncl in ncls
-        )  
-    
-    return cyts_med, ncls_med   
-    
-    
+    # Process
+    outputs = Parallel(n_jobs=-1)(
+        delayed(_process)(i, cyt, ncl) 
+        for i, (cyt, ncl) in enumerate(zip(cyts, ncls))
+        )    
+    cyts_med = [data[0] for data in outputs]
+    ncls_med = [data[1] for data in outputs]
+    cyts_msk = [data[2] for data in outputs]
+    ncls_msk = [data[3] for data in outputs]
 
 #%% Class : Display() ---------------------------------------------------------
 
@@ -155,11 +181,19 @@ class Display:
         path = self.paths[self.idx]
         dir_path = data_path / path.stem
         stk_path = list(dir_path.glob("*_stk.tif"))[0]
+        cyt_med_path = str(stk_path).replace("stk", "cyt_med")
+        ncl_med_path = str(stk_path).replace("stk", "ncl_med")
+        cyt_msk_path = str(stk_path).replace("stk", "cyt_msk")
+        ncl_msk_path = str(stk_path).replace("stk", "ncl_msk")
         self.stk = io.imread(stk_path)
         self.C1 = self.stk[..., 0]
         self.C2 = self.stk[..., 1]
         self.C3 = self.stk[..., 2]
         self.C4 = self.stk[..., 3]
+        self.cyt_msk = io.imread(cyt_msk_path)
+        self.ncl_msk = io.imread(ncl_msk_path)
+        self.cyt_med = io.imread(cyt_med_path)
+        self.ncl_med = io.imread(ncl_med_path)
         
     def init_viewer(self):
         
@@ -180,6 +214,14 @@ class Display:
             )
         self.viewer.add_image(
             self.C4, name="nuclei", visible=True,
+            blending="additive", colormap="bop blue",
+            )
+        self.viewer.add_image(
+            self.cyt_msk, name="cyt_msk", visible=True,
+            blending="additive", colormap="bop blue",
+            )
+        self.viewer.add_image(
+            self.ncl_msk, name="ncl_msk", visible=True,
             blending="additive", colormap="bop blue",
             )
         
@@ -260,7 +302,7 @@ if __name__ == "__main__":
     for path in stk_paths:
         dir_path = Path(data_path / path.stem)
         stk_path = list(dir_path.glob("*_stk.tif"))
-        if not stk_path or not stk_path[0] or overwrite["preprocess"]:
+        if not stk_path or not stk_path[0].exists() or overwrite["preprocess"]:
             paths.append(path)
     
     print("preprocess : ", end="", flush=True)
@@ -277,23 +319,34 @@ if __name__ == "__main__":
     
     # Process -----------------------------------------------------------------
 
+    # Paths
+    paths = []
+    for path in stk_paths:
+        dir_path = Path(data_path / path.stem)
+        cyt_med_path = list(dir_path.glob("*_cyt_med.tif"))
+        if not cyt_med_path or not cyt_med_path[0].exists() or overwrite["process"]:
+            paths.append(path)
+
     print("process    : ", end="", flush=True)
     t0 = time.time()
     
-    cyts_med, ncls_med = process(stk_paths)
-    
-    # # Execute
-    # Parallel(n_jobs=-1)(
-    #     delayed(process)(path) 
-    #     for path in paths
-    #     )  
-    
+    if paths:
+        process(paths)
+        
     t1 = time.time()
     print(f"{t1 - t0:.3f}s")
     
     # Display -----------------------------------------------------------------
     
-    # Display(stk_paths)
+    Display(stk_paths)
+
+#%%
+
+    # # Threshold
+    # cyts_thresh = threshold_otsu(np.concatenate(cyts, axis=0))
+    # ncls_thresh = threshold_otsu(np.concatenate(ncls, axis=0))
+    # cyts_med_thresh = threshold_otsu(np.concatenate(cyts_med, axis=0))
+    # ncls_med_thresh = threshold_otsu(np.concatenate(ncls_med, axis=0))
     
 #%%
 
