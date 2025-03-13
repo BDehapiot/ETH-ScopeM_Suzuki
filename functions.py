@@ -33,7 +33,7 @@ def format_stack(path, rf=0.5):
             
         # Flip z axis
         stk = np.flip(stk, axis=0)
-        
+                
         # Adjust voxSize
         voxsize = voxsize0[0] / rf
         
@@ -41,9 +41,8 @@ def format_stack(path, rf=0.5):
 
 #%% Function : merge_stack() --------------------------------------------------
 
-def merge_stack(stk, voxsize):
-    C1, C3, C4 = stk[:, 0, ...], stk[:, 2, ...], stk[:, 3, ...]
+def prepare_stack(stk):
+    C1, C4 = stk[:, 0, ...], stk[:, 3, ...]
     C1 = adjust_gamma(norm_pct(C1), gamma=0.5)
-    C3 = adjust_gamma(norm_pct(C3), gamma=0.5)
     C4 = adjust_gamma(norm_pct(C4), gamma=0.5)
-    return (C1 + C3 + C4 ) / 3
+    return (C1 + C4 ) / 3

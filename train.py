@@ -6,6 +6,9 @@ import numpy as np
 from skimage import io
 from pathlib import Path
 
+# functions
+from functions import format_stack, merge_stack
+
 # bdtools
 from bdtools.models.annotate import Annotate
 from bdtools.models.unet import UNet
@@ -14,12 +17,13 @@ from bdtools.models.unet import UNet
 
 # Procedure
 annotate = 0
-train = 1
+train = 0
+predict = 1
 
 # UNet build()
 backbone = "resnet18"
 activation = "sigmoid"
-downscale_factor = 1
+downscale_factor = 2
 
 # UNet train()
 preview = False
@@ -31,7 +35,7 @@ img_norm = "none"
 msk_type = "normal"
 
 # augment
-iterations = 500
+iterations = 1000
 gamma_p = 0.5
 gblur_p = 0
 noise_p = 0.5 
@@ -46,10 +50,13 @@ metric = "soft_dice_coef"
 learning_rate = 0.0005
 patience = 20
 
-save_name = f"ds{downscale_factor}_{patch_size}_{msk_type}"
+# predict
+rf = 0.5
 
 #%% Initialize ----------------------------------------------------------------
 
+data_path = Path("D:\local_Suzuki\data")
+stk_paths = list(data_path.glob("*.nd2"))   
 train_path = Path("data", "train")
 
 #%% Execute -------------------------------------------------------------------
@@ -109,3 +116,21 @@ if __name__ == "__main__":
             patience=patience,
             
             )
+        
+    if predict:
+        
+        # Format and merge stack
+        path = stk_paths[1]
+        stk, voxsize = format_stack(path, rf=rf)
+        mrg = merge_stack(stk, voxsize)
+        
+        # Predict
+        unet = UNet(
+            load_name="model_512_normal_1000-160_2",
+            )
+        prd = unet.predict(mrg, verbose=3)
+                
+        # Display
+        viewer = napari.Viewer()
+        viewer.add_image(mrg)
+        viewer.add_image(prd)

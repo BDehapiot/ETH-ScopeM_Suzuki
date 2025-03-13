@@ -6,7 +6,7 @@ from skimage import io
 from pathlib import Path
 
 # functions
-from functions import format_stack, merge_stack
+from functions import format_stack, prepare_stack
 
 #%% Inputs --------------------------------------------------------------------
 
@@ -27,13 +27,13 @@ if __name__ == "__main__":
     
         # Format and merge stack
         stk, voxsize = format_stack(path, rf=rf)
-        mrg = merge_stack(stk, voxsize)
+        prp = prepare_stack(stk, voxsize)
         
         # Save random slices
         idxs = np.random.choice(
-            np.arange(mrg.shape[0]), size=nSlice, replace=False)
+            np.arange(prp.shape[0]), size=nSlice, replace=False)
         for idx in idxs:
             io.imsave(
                 train_path / (path.stem + f"_{voxsize}_z{idx:02d}_mrg.tif"),
-                mrg[idx, ...], check_contrast=False
+                prp[idx, ...], check_contrast=False
                 )

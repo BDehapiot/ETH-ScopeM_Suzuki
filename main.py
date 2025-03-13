@@ -11,6 +11,9 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from joblib import Parallel, delayed
 
+# functions
+from functions import format_stack, merge_stack
+
 # bdtools
 from bdtools.norm import norm_pct
 
@@ -40,7 +43,7 @@ from qtpy.QtWidgets import (
 
 # Procedure
 overwrite = {
-    "preprocess" : 0,
+    "preprocess" : 1,
     "process" : 1,
     }
 
@@ -68,42 +71,22 @@ def save(stk, path, voxsize):
 
 def preprocess(path, rf=0.5):
         
-    with nd2.ND2File(path) as ndfile:
+    # Format stack
+    stk, voxsize = format_stack(path, rf=rf)
         
-        # voxSize
-        voxsize0 = (
-            ndfile.voxel_size()[2],
-            ndfile.voxel_size()[1],
-            ndfile.voxel_size()[0],
-            )
-        
-        # Determine isotropic rescaling factor (rfi)
-        rfi = voxsize0[1] / voxsize0[0]
-        
-        # Load & rescale stack
-        stk = ndfile.asarray()
-        stk = rescale(stk, (1, 1, rfi, rfi), order=0) # iso rescale (rfi)
-        stk = rescale(stk, (rf, 1, rf, rf), order=0) # custom rescale (rf)
-            
-        # Flip z axis
-        stk = np.flip(stk, axis=0)
-        
-        # Adjust voxSize
-        voxsize = voxsize0[0] / rf
-        
-        # Setup directory 
-        dir_path = Path(data_path / path.stem)
-        if dir_path.exists():
-            for item in dir_path.iterdir():
-                if item.is_file() or item.is_symlink():
-                    item.unlink()
-                elif item.is_dir():
-                    shutil.rmtree(item)
-        dir_path.mkdir(exist_ok=True)
-        
-        # Save       
-        stk_path = dir_path / (path.stem + f"_{voxsize}_stk.tif")
-        save(stk, stk_path, voxsize)
+    # Setup directory 
+    dir_path = Path(data_path / path.stem)
+    if dir_path.exists():
+        for item in dir_path.iterdir():
+            if item.is_file() or item.is_symlink():
+                item.unlink()
+            elif item.is_dir():
+                shutil.rmtree(item)
+    dir_path.mkdir(exist_ok=True)
+    
+    # Save       
+    stk_path = dir_path / (path.stem + f"_{voxsize}_stk.tif")
+    save(stk, stk_path, voxsize)
 
 #%% Function : process() ------------------------------------------------------
 
