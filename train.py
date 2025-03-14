@@ -1,13 +1,13 @@
 #%% Imports -------------------------------------------------------------------
 
-import h5py
+# import h5py
 import napari
 import numpy as np
 from skimage import io
 from pathlib import Path
 
 # functions
-from functions import format_stack, merge_stack
+from functions import format_stack, prepare_stack
 
 # bdtools
 from bdtools.models.annotate import Annotate
@@ -17,13 +17,13 @@ from bdtools.models.unet import UNet
 
 # Procedure
 annotate = 0
-train = 0
-predict = 1
+train = 1
+predict = 0
 
 # UNet build()
 backbone = "resnet18"
 activation = "sigmoid"
-downscale_factor = 2
+downscale_factor = 3
 
 # UNet train()
 preview = False
@@ -35,7 +35,7 @@ img_norm = "none"
 msk_type = "normal"
 
 # augment
-iterations = 1000
+iterations = 2000
 gamma_p = 0.5
 gblur_p = 0
 noise_p = 0.5 
@@ -122,7 +122,7 @@ if __name__ == "__main__":
         # Format and merge stack
         path = stk_paths[1]
         stk, voxsize = format_stack(path, rf=rf)
-        mrg = merge_stack(stk, voxsize)
+        mrg = prepare_stack(stk)
         
         # Predict
         unet = UNet(

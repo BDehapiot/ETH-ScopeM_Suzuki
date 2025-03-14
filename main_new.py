@@ -47,7 +47,7 @@ from qtpy.QtWidgets import (
 overwrite = {
     "preprocess" : 0,
     "predict"    : 0,
-    "process"    : 0,
+    "process"    : 1,
     }
 
 # Parameters
@@ -120,7 +120,7 @@ def process(paths, cyt_thresh=0.05, ncl_thresh=0.20):
     def _process(i, cyt, ncl, prd):
         
         # Process
-        prd_prp = norm_pct(gaussian(prd, sigma=1))
+        prd_prp = norm_pct(gaussian(prd, sigma=2))
         cyt_prp = norm_pct(gaussian(cyt, sigma=1))
         ncl_prp = norm_pct(gaussian(ncl, sigma=1))
         cyt_prp *= prd_prp
@@ -129,6 +129,7 @@ def process(paths, cyt_thresh=0.05, ncl_thresh=0.20):
         ncl_msk = ncl_prp > ncl_thresh
         cyt_msk = remove_small_objects(cyt_msk, min_size=1e4)
         ncl_msk = remove_small_objects(ncl_msk, min_size=1e4)
+        cyt_msk[ncl_msk] = True
         
         # Save
         dir_path = Path(data_path / paths[i].stem)
@@ -361,41 +362,48 @@ if __name__ == "__main__":
     
     # Display -----------------------------------------------------------------
     
-    # Display(stk_paths)
+    Display(stk_paths)
 
 #%%
     
-    # Fetch
-    idx = 0
-    path = stk_paths[idx]
-    dir_path = Path(data_path / path.stem)
-    stk_path = list(dir_path.glob("*_stk.tif"))[0]
-    cyt_msk_path = str(stk_path).replace("stk", "cyt_msk")
-    stk = np.moveaxis(io.imread(stk_path), -1, 1)
-    cyt_msk = io.imread(cyt_msk_path)
-    C1 = stk[:, 0, ...]
-    C2 = stk[:, 1, ...]
+    # # Fetch
+    # idx = 0
+    # path = stk_paths[idx]
+    # dir_path = Path(data_path / path.stem)
+    # stk_path = list(dir_path.glob("*_stk.tif"))[0]
+    # cyt_msk_path = str(stk_path).replace("stk", "cyt_msk")
+    # stk = np.moveaxis(io.imread(stk_path), -1, 1)
+    # cyt_msk = io.imread(cyt_msk_path)
+    # C1 = stk[:, 0, ...]
+    # C2 = stk[:, 1, ...]
     
-    # Process
-    C2[cyt_msk == 0] = 0
+    # # Process
+    # C2_prp = C2.copy()
+    # C2_prp = norm_pct(C2_prp)
+    # C2_prp[cyt_msk == 0] = 0
+    # C2_hmax = h_maxima(C2_prp, 0.1, footprint=ball(1))
     
-    # Display
-    viewer = napari.Viewer()
-    viewer.dims.ndisplay = 3
+    # # Display
+    # viewer = napari.Viewer()
+    # viewer.dims.ndisplay = 3
     
-    viewer.add_image(
-        C1, name="C1", colormap="bop orange", visible=1,
-        blending="additive", gamma=0.5,
-        )
-    viewer.add_image(
-        C2, name="C2", colormap="green", visible=1,
-        blending="additive", gamma=0.5,
-        )
+    # # viewer.add_image(
+    # #     C1, name="C1", colormap="bop orange", visible=1,
+    # #     blending="additive", gamma=0.5,
+    # #     )
+    # viewer.add_image(
+    #     C2_prp, name="C2_prp", colormap="magenta", visible=1,
+    #     blending="additive", gamma=0.5,
+    #     )
     
-    viewer.add_image(
-        cyt_msk, name="cyt_msk", colormap="bop orange", visible=1,
-        rendering="attenuated_mip", attenuation=0.5, 
-        )
+    # # viewer.add_image(
+    # #     cyt_msk, name="cyt_msk", colormap="bop orange", visible=1,
+    # #     rendering="attenuated_mip", attenuation=0.5, 
+    # #     )
+    # viewer.add_image(
+    #     C2_hmax, name="C2_hmax", colormap="gray", visible=1,
+    #     rendering="attenuated_mip", attenuation=0.5, 
+    #     )
 
 #%%
 
