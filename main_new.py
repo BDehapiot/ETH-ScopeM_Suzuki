@@ -22,8 +22,12 @@ from bdtools.models.unet import UNet
 from skimage.filters import gaussian
 from skimage.transform import rescale
 from skimage.filters.rank import median
+from skimage.segmentation import watershed
 from skimage.filters import threshold_otsu
-from skimage.morphology import ball, h_maxima, remove_small_objects
+from skimage.measure import label, regionprops
+from skimage.morphology import (
+    ball, h_maxima, remove_small_objects, remove_small_holes
+    )
 
 # Qt
 from qtpy.QtGui import QFont
@@ -47,13 +51,15 @@ from qtpy.QtWidgets import (
 overwrite = {
     "preprocess" : 0,
     "predict"    : 0,
-    "process"    : 1,
+    "process"    : 0,
     }
 
 # Parameters
 rf = 0.5
 cyt_thresh = 0.05
-ncl_thresh = 0.20
+ncl_thresh = 0.10
+# model_name = "model_512_normal_1000-160_2"
+model_name = "model_512_normal_2000-160_3"
 
 #%% Initialize ----------------------------------------------------------------
 
@@ -69,6 +75,26 @@ def save(stk, path, voxsize):
     metadata = {"axes" : axes, "spacing" : voxsize, "unit" : "um"}
     tifffile.imwrite(
         path, stk, imagej=True, resolution=resolution, metadata=metadata)
+
+def get_masks(stk, ):
+
+def get_blobs(stk, mask=None, sigma0=0.5, sigma=5, thresh=0.5):
+    
+    # preprocess
+    prp = gaussian(stk, sigma=0.5)
+    prp -= gaussian(stk, sigma=5)
+    prp = norm_pct(stk)
+    if mask is not None:
+        prp[mask == 0] = 0
+    msk = prp > 0.75
+    
+    # watershed
+    hmax = h_maxima(prp, 0.1, footprint=ball(1))
+    hmax = (hmax * 255).astype("uint8")
+    hmax = label(hmax)
+    lbl = watershed(-prp, markers=hmax, mask=msk)
+    
+    return lbl
 
 #%% Function : preprocess() ---------------------------------------------------
 
@@ -104,7 +130,7 @@ def predict(path):
     
     # Predict
     prp = prepare_stack(stk)
-    unet = UNet(load_name="model_512_normal_1000-160_2")
+    unet = UNet(load_name=model_name)
     prd = unet.predict(prp, verbose=0)
 
     # Save       
@@ -114,22 +140,33 @@ def predict(path):
 #%% Function : process() ------------------------------------------------------
 
 def process(paths, cyt_thresh=0.05, ncl_thresh=0.20):
-    
-    global stk, cyts, ncls, prds
-    
+
     def _process(i, cyt, ncl, prd):
         
         # Process
         prd_prp = norm_pct(gaussian(prd, sigma=2))
         cyt_prp = norm_pct(gaussian(cyt, sigma=1))
-        ncl_prp = norm_pct(gaussian(ncl, sigma=1))
+        ncl_prp = norm_pct(gaussian(ncl, sigma=2))
         cyt_prp *= prd_prp
         ncl_prp *= prd_prp
         cyt_msk = cyt_prp > cyt_thresh
         ncl_msk = ncl_prp > ncl_thresh
         cyt_msk = remove_small_objects(cyt_msk, min_size=1e4)
         ncl_msk = remove_small_objects(ncl_msk, min_size=1e4)
-        cyt_msk[ncl_msk] = True
+        
+        # Posprocess ncl_msk
+        for z in range(ncl.shape[0]):
+            ncl_msk[z, ...] = remove_small_holes(ncl_msk[z, ...])
+        ncl_lbl = label(ncl_msk)
+        for props in regionprops(ncl_lbl, intensity_image=cyt_msk):
+            lbl = props.label
+            val = props.intensity_mean
+            if val < 0.25:
+                ncl_lbl[ncl_lbl == lbl] = 0
+        ncl_msk = ncl_lbl > 0
+        
+        # Postprocess cyt_msk
+        cyt_msk[ncl_msk] = 1
         
         # Save
         dir_path = Path(data_path / paths[i].stem)
@@ -213,10 +250,12 @@ class Display:
             )
         self.viewer.add_image(
             self.cyt_msk, name="cyt_msk", colormap="bop orange", visible=True,
+            blending="translucent_no_depth", opacity=0.5,
             rendering="attenuated_mip", attenuation=0.5, 
             )
         self.viewer.add_image(
             self.ncl_msk, name="ncl_msk", colormap="bop blue", visible=True,
+            blending="translucent_no_depth", opacity=0.5,
             rendering="attenuated_mip", attenuation=0.5, 
             )
 
@@ -327,7 +366,7 @@ if __name__ == "__main__":
         if not prd_path or not prd_path[0].exists() or overwrite["predict"]:
             paths.append(path)
     
-    print("predict : ", end="", flush=True)
+    print("predict    : ", end="", flush=True)
     t0 = time.time()
     
     if paths:
@@ -362,47 +401,97 @@ if __name__ == "__main__":
     
     # Display -----------------------------------------------------------------
     
-    Display(stk_paths)
+    # Display(stk_paths)
 
 #%%
     
-    # # Fetch
-    # idx = 0
-    # path = stk_paths[idx]
-    # dir_path = Path(data_path / path.stem)
-    # stk_path = list(dir_path.glob("*_stk.tif"))[0]
-    # cyt_msk_path = str(stk_path).replace("stk", "cyt_msk")
-    # stk = np.moveaxis(io.imread(stk_path), -1, 1)
-    # cyt_msk = io.imread(cyt_msk_path)
-    # C1 = stk[:, 0, ...]
-    # C2 = stk[:, 1, ...]
+    def detect_blobs(stk, mask=None, sigma0=0.5, sigma=5, thresh=0.5):
+        
+        # preprocess
+        prp = gaussian(stk, sigma=0.5)
+        prp -= gaussian(stk, sigma=5)
+        prp = norm_pct(stk)
+        if mask is not None:
+            prp[mask == 0] = 0
+        msk = prp > 0.75
+        
+        # watershed
+        hmax = h_maxima(prp, 0.1, footprint=ball(1))
+        hmax = (hmax * 255).astype("uint8")
+        hmax = label(hmax)
+        lbl = watershed(-prp, markers=hmax, mask=msk)
+        
+        return lbl
+
+    # Fetch
+    idx = 9
+    path = stk_paths[idx]
+    dir_path = Path(data_path / path.stem)
+    stk_path = list(dir_path.glob("*_stk.tif"))[0]
+    cyt_msk_path = str(stk_path).replace("stk", "cyt_msk")
+    ncl_msk_path = str(stk_path).replace("stk", "ncl_msk")
+    stk = np.moveaxis(io.imread(stk_path), -1, 1)
+    cyt_msk = io.imread(cyt_msk_path)
+    ncl_msk = io.imread(ncl_msk_path)
+    C1 = stk[:, 0, ...]
+    C2 = stk[:, 1, ...]
+    C3 = stk[:, 2, ...]
     
-    # # Process
-    # C2_prp = C2.copy()
-    # C2_prp = norm_pct(C2_prp)
-    # C2_prp[cyt_msk == 0] = 0
-    # C2_hmax = h_maxima(C2_prp, 0.1, footprint=ball(1))
+    # Detect blobs
+    C1_lbl = detect_blobs(C1, mask=cyt_msk, thresh=0.25)
+    C2_lbl = detect_blobs(C2, mask=cyt_msk, thresh=0.5)
+    C3_lbl = detect_blobs(C3, mask=cyt_msk, thresh=0.33)
+
+    # Display
+    viewer = napari.Viewer()
+    viewer.dims.ndisplay = 3
     
-    # # Display
-    # viewer = napari.Viewer()
-    # viewer.dims.ndisplay = 3
+    viewer.add_image(
+        C1, name="C1", colormap="bop orange", visible=0,
+        blending="additive", gamma=1,
+        )
+    viewer.add_image(
+        C2, name="C2", colormap="bop blue", visible=0,
+        blending="additive", gamma=1,
+        )
+    viewer.add_image(
+        C3, name="C3", colormap="bop purple", visible=1,
+        blending="additive", gamma=1,
+        )
     
-    # # viewer.add_image(
-    # #     C1, name="C1", colormap="bop orange", visible=1,
-    # #     blending="additive", gamma=0.5,
-    # #     )
-    # viewer.add_image(
-    #     C2_prp, name="C2_prp", colormap="magenta", visible=1,
-    #     blending="additive", gamma=0.5,
+
+    viewer.add_image(
+        cyt_msk, name="cyt_msk", colormap="gray", visible=True,
+        blending="translucent_no_depth", opacity=0.5,
+        rendering="attenuated_mip", attenuation=0.5, 
+        )
+    viewer.add_image(
+        ncl_msk, name="ncl_msk", colormap="blue", visible=True,
+        blending="translucent_no_depth", opacity=0.5,
+        rendering="attenuated_mip", attenuation=0.5, 
+        )
+    
+    viewer.add_image(
+        C1_lbl > 0, name="C1_msk", colormap="bop orange", visible=0,
+        blending="additive", rendering="attenuated_mip", attenuation=0.5, 
+        )
+    viewer.add_image(
+        C2_lbl > 0, name="C2_msk", colormap="bop blue", visible=0,
+        blending="additive", rendering="attenuated_mip", attenuation=0.5, 
+        )
+    viewer.add_image(
+        C3_lbl > 0, name="C3_msk", colormap="bop purple", visible=1,
+        blending="additive", rendering="attenuated_mip", attenuation=0.5, 
+        )
+    
+    # viewer.add_labels(
+    #     C1_lbl, name="C1_lbl", visible=0,
     #     )
-    
-    # # viewer.add_image(
-    # #     cyt_msk, name="cyt_msk", colormap="bop orange", visible=1,
-    # #     rendering="attenuated_mip", attenuation=0.5, 
-    # #     )
-    # viewer.add_image(
-    #     C2_hmax, name="C2_hmax", colormap="gray", visible=1,
-    #     rendering="attenuated_mip", attenuation=0.5, 
+    # viewer.add_labels(
+    #     C2_lbl, name="C2_lbl", visible=0,
+    #     )
+    # viewer.add_labels(
+    #     C3_lbl, name="C3_lbl", visible=0,
     #     )
 
 #%%

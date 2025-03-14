@@ -1,6 +1,5 @@
 #%% Imports -------------------------------------------------------------------
 
-# import h5py
 import napari
 import numpy as np
 from skimage import io
