@@ -1,9 +1,7 @@
 #%% Imports -------------------------------------------------------------------
 
-import nd2
 import time
 import shutil
-import napari
 import tifffile
 import numpy as np
 from skimage import io
@@ -12,25 +10,37 @@ import matplotlib.pyplot as plt
 from joblib import Parallel, delayed
 
 # functions
-from functions import format_stack, merge_stack
+from functions import format_stack, prepare_stack
 
 # bdtools
 from bdtools.norm import norm_pct
+from bdtools.models.unet import UNet
 
 # skimage
-from skimage.transform import rescale
-from skimage.filters.rank import median
-from skimage.filters import threshold_otsu
-from skimage.morphology import ball, h_maxima
+from skimage.filters import gaussian
+from skimage.segmentation import watershed
+from skimage.measure import label, regionprops
+from skimage.morphology import (
+    ball, h_maxima, remove_small_objects, remove_small_holes, binary_dilation
+    )
+
+# Napari
+import napari
+from napari.layers.labels.labels import Labels
 
 # Qt
 from qtpy.QtGui import QFont
 from qtpy.QtWidgets import (
-    QWidget, QPushButton, QLabel,
-    QGroupBox, QVBoxLayout, 
+    QWidget, QPushButton, QRadioButton, QLabel,
+    QGroupBox, QVBoxLayout, QHBoxLayout
     )
 
 #%% Comments ------------------------------------------------------------------
+
+'''
+Current:
+- improve check display and rendering speed
+'''
 
 '''
 - C1 : NRP2-EGFP (protein of interest)
@@ -43,37 +53,99 @@ from qtpy.QtWidgets import (
 
 # Procedure
 overwrite = {
-    "preprocess" : 1,
-    "process" : 1,
+    "preprocess" : 0,
+    "predict"    : 0,
+    "process"    : 1,
     }
 
 # Parameters
 rf = 0.5
-cyt_coeff = 0.5
-ncl_coeff = 1.0
+cyt_thresh = 0.05
+ncl_thresh = 0.15
+C1b_thresh = 0.75
+C2b_thresh = 0.33
+C3b_thresh = 0.25
+model_name = "model_512_normal_2000-160_3"
 
 #%% Initialize ----------------------------------------------------------------
 
 data_path = Path("D:\local_Suzuki\data")
-stk_paths = list(data_path.glob("*.nd2"))
+htk_paths = list(data_path.glob("*.nd2"))
 
 #%% Function(s) ---------------------------------------------------------------
 
-def save(stk, path, voxsize):
-    if stk.ndim == 3: axes = "ZYX"
-    if stk.ndim == 4: axes = "ZCYX"
+def save(arr, path, voxsize):
+    if arr.ndim == 3: axes = "ZYX"
+    if arr.ndim == 4: axes = "ZCYX"
     resolution = (1 / voxsize, 1 / voxsize)
     metadata = {"axes" : axes, "spacing" : voxsize, "unit" : "um"}
     tifffile.imwrite(
-        path, stk, imagej=True, resolution=resolution, metadata=metadata)
+        path, arr, imagej=True, resolution=resolution, metadata=metadata)
+
+def get_masks(htk, prd):
+    
+    # Process
+    prd_prp = norm_pct(gaussian(prd, sigma=2))
+    cyt_prp = norm_pct(gaussian(htk[:, 0, ...], sigma=1))
+    ncl_prp = norm_pct(gaussian(htk[:, 3, ...], sigma=2))
+    cyt_prp *= prd_prp
+    ncl_prp *= prd_prp
+    cyt_msk = cyt_prp > cyt_thresh
+    ncl_msk = ncl_prp > ncl_thresh
+    cyt_msk = remove_small_objects(cyt_msk, min_size=1e4)
+    ncl_msk = remove_small_objects(ncl_msk, min_size=1e4)
+    
+    # Posprocess ncl_msk
+    for z in range(ncl_msk.shape[0]):
+        ncl_msk[z, ...] = remove_small_holes(ncl_msk[z, ...])
+    ncl_lbl = label(ncl_msk)
+    for props in regionprops(ncl_lbl, intensity_image=cyt_msk):
+        lbl = props.label
+        val = props.intensity_mean
+        if val < 0.25:
+            ncl_lbl[ncl_lbl == lbl] = 0
+    ncl_msk = ncl_lbl > 0
+    
+    # Postprocess cyt_msk
+    cyt_msk[ncl_msk] = 1
+    
+    return cyt_msk, ncl_msk
+
+def get_blobs(arr, mask=None, sigma0=0.5, sigma1=5, thresh=0.5, out_prp=False):
+    
+    # preprocess
+    prp = gaussian(arr, sigma=sigma0)
+    prp -= gaussian(prp, sigma=sigma1)
+    prp = norm_pct(prp)
+    if mask is not None:
+        prp[mask == 0] = 0
+    msk = prp > thresh
+    
+    # watershed
+    hmax = h_maxima(prp, 0.1, footprint=ball(1))
+    hmax = (hmax * 255).astype("uint8")
+    hmax = label(hmax)
+    lbl = watershed(-prp, markers=hmax, mask=msk)
+    
+    if out_prp:
+        return lbl, prp
+    else:
+        return lbl
+    
+def get_outlines(arr):
+    arr = arr > 0
+    out = []
+    for img in arr:
+        out.append(binary_dilation(img) ^ img)
+    return np.stack(out)
 
 #%% Function : preprocess() ---------------------------------------------------
 
 def preprocess(path, rf=0.5):
         
     # Format stack
-    stk, voxsize = format_stack(path, rf=rf)
-        
+    htk, voxsize = format_stack(path, rf=rf)
+           
     # Setup directory 
     dir_path = Path(data_path / path.stem)
     if dir_path.exists():
@@ -85,70 +157,88 @@ def preprocess(path, rf=0.5):
     dir_path.mkdir(exist_ok=True)
     
     # Save       
-    stk_path = dir_path / (path.stem + f"_{voxsize}_stk.tif")
-    save(stk, stk_path, voxsize)
+    htk_path = dir_path / (path.stem + f"_{voxsize}_htk.tif")
+    save(htk, htk_path, voxsize)
+    
+#%% Function : predict() ------------------------------------------------------    
+
+def predict(path):
+            
+    # Load data
+    dir_path = Path(data_path / path.stem)
+    htk_path = list(dir_path.glob("*_htk.tif"))[0]
+    voxsize = float(str(htk_path.stem).split("_")[1])
+    htk = io.imread(htk_path)
+    htk = np.moveaxis(htk, -1, 1)
+    
+    # Predict
+    prp = prepare_stack(htk)
+    unet = UNet(load_name=model_name)
+    prd = unet.predict(prp, verbose=0)
+
+    # Save       
+    prd_path = str(htk_path).replace("htk", "prd")
+    save(prd, prd_path, voxsize)
 
 #%% Function : process() ------------------------------------------------------
 
-def process(paths, cyt_coeff=1, ncl_coeff=1):
-    
-    global cyts, ncls, cyts_med, ncls_med, cyts_msk, ncls_msk, cyts_thresh, ncls_thresh
-    
-    def _process(i, cyt, ncl):
+def process(
+        paths, 
+        cyt_thresh=0.05, 
+        ncl_thresh=0.20,
+        C1b_thresh=0.25,
+        C2b_thresh=0.50,
+        C3b_thresh=0.33,
+        ):
+
+    def _process(i, htk, prd):
         
-        # Median filter
-        cyt_med = median(cyt.copy(), footprint=ball(5))
-        ncl_med = median(ncl.copy(), footprint=ball(5))
-                
         # Get masks
-        cyt_msk = cyt_med > (cyts_thresh * cyt_coeff)
-        ncl_msk = ncl_med > (ncls_thresh * ncl_coeff)
-        # cyt_msk = remove_small_objects(cyt_msk, min_size=1e4)
-        # ncl_msk = remove_small_objects(ncl_msk, min_size=1e4)
+        cyt_msk, ncl_msk = get_masks(htk, prd)
         
+        # Get blobs
+        C1b_lbl = get_blobs(
+            htk[:, 0, ...], mask=cyt_msk, 
+            sigma0=0.5, sigma1=5, thresh=C1b_thresh
+            )
+        C2b_lbl = get_blobs(
+            htk[:, 1, ...], mask=cyt_msk, 
+            sigma0=0.5, sigma1=5, thresh=C2b_thresh
+            )
+        C3b_lbl = get_blobs(
+            htk[:, 2, ...], mask=cyt_msk, 
+            sigma0=0.5, sigma1=5, thresh=C3b_thresh
+            )
+                
         # Save
         dir_path = Path(data_path / paths[i].stem)
-        stk_path = list(dir_path.glob("*_stk.tif"))[0]
-        cyt_med_path = str(stk_path).replace("stk", "cyt_med")
-        ncl_med_path = str(stk_path).replace("stk", "ncl_med")
-        cyt_msk_path = str(stk_path).replace("stk", "cyt_msk")
-        ncl_msk_path = str(stk_path).replace("stk", "ncl_msk")
-        voxsize = float(str(stk_path.stem).split("_")[1])
-        save(cyt_med, cyt_med_path, voxsize)
-        save(ncl_med, ncl_med_path, voxsize)
-        save(cyt_msk.astype("uint8"), cyt_msk_path, voxsize)
-        save(ncl_msk.astype("uint8"), ncl_msk_path, voxsize)
-        
-        return cyt_med, ncl_med, cyt_msk, ncl_msk
+        htk_path = list(dir_path.glob("*_htk.tif"))[0]
+        voxsize = float(str(htk_path.stem).split("_")[1])
+        cyt_msk_path = str(htk_path).replace("htk", "cyt_msk")
+        ncl_msk_path = str(htk_path).replace("htk", "ncl_msk")
+        C1b_lbl_path = str(htk_path).replace("htk", "C1b_lbl")
+        C2b_lbl_path = str(htk_path).replace("htk", "C2b_lbl")
+        C3b_lbl_path = str(htk_path).replace("htk", "C3b_lbl")
+        save((cyt_msk * 255).astype("uint8"), cyt_msk_path, voxsize)
+        save((ncl_msk * 255).astype("uint8"), ncl_msk_path, voxsize)
+        save(C1b_lbl.astype("uint16"), C1b_lbl_path, voxsize)
+        save(C2b_lbl.astype("uint16"), C2b_lbl_path, voxsize)
+        save(C3b_lbl.astype("uint16"), C3b_lbl_path, voxsize)
         
     # Load data
-    cyts, ncls = [], []
+    htks, prds = [], []
     for path in paths:
         dir_path = Path(data_path / path.stem)
-        stk_path = list(dir_path.glob("*_stk.tif"))[0]
-        stk = io.imread(stk_path)
-        cyts.append(stk[..., 0]) # NRP2
-        ncls.append(stk[..., 3]) # nuclei
-        
-    # Normalize
-    cyts = norm_pct(cyts, sample_fraction=0.01)
-    ncls = norm_pct(ncls, sample_fraction=0.01)
-    cyts = [(cyt * 255).astype("uint8") for cyt in cyts]
-    ncls = [(ncl * 255).astype("uint8") for ncl in ncls]
-    
-    # Get threshold
-    cyts_thresh = threshold_otsu(np.concatenate(cyts, axis=0))
-    ncls_thresh = threshold_otsu(np.concatenate(ncls, axis=0))
+        htk_path = list(dir_path.glob("*_htk.tif"))[0]
+        prd_path = list(dir_path.glob("*_prd.tif"))[0]
+        htks.append(np.moveaxis(io.imread(htk_path), -1, 1))
+        prds.append(io.imread(prd_path))
     
     # Process
-    outputs = Parallel(n_jobs=-1)(
-        delayed(_process)(i, cyt, ncl) 
-        for i, (cyt, ncl) in enumerate(zip(cyts, ncls))
+    Parallel(n_jobs=-1)(
+        delayed(_process)(i, htk, prd) 
+        for i, (htk, prd) in enumerate(zip(htks, prds))
         )    
-    cyts_med = [data[0] for data in outputs]
-    ncls_med = [data[1] for data in outputs]
-    cyts_msk = [data[2] for data in outputs]
-    ncls_msk = [data[3] for data in outputs]
 
 #%% Class : Display() ---------------------------------------------------------
 
@@ -165,77 +255,187 @@ class Display:
         # Load
         path = self.paths[self.idx]
         dir_path = data_path / path.stem
-        stk_path = list(dir_path.glob("*_stk.tif"))[0]
-        cyt_med_path = str(stk_path).replace("stk", "cyt_med")
-        ncl_med_path = str(stk_path).replace("stk", "ncl_med")
-        cyt_msk_path = str(stk_path).replace("stk", "cyt_msk")
-        ncl_msk_path = str(stk_path).replace("stk", "ncl_msk")
-        self.stk = io.imread(stk_path)
-        self.C1 = self.stk[..., 0]
-        self.C2 = self.stk[..., 1]
-        self.C3 = self.stk[..., 2]
-        self.C4 = self.stk[..., 3]
-        self.cyt_msk = io.imread(cyt_msk_path) * 255
-        self.ncl_msk = io.imread(ncl_msk_path) * 255
-        self.cyt_med = io.imread(cyt_med_path)
-        self.ncl_med = io.imread(ncl_med_path)
+        htk_path = list(dir_path.glob("*_htk.tif"))[0]
+        prd_path = str(htk_path).replace("htk", "prd")
+        cyt_msk_path = str(htk_path).replace("htk", "cyt_msk")
+        ncl_msk_path = str(htk_path).replace("htk", "ncl_msk")
+        C1b_lbl_path = str(htk_path).replace("htk", "C1b_lbl")
+        C2b_lbl_path = str(htk_path).replace("htk", "C2b_lbl")
+        C3b_lbl_path = str(htk_path).replace("htk", "C3b_lbl")
         
+        self.htk = io.imread(htk_path)
+        self.C1 = self.htk[..., 0]
+        self.C2 = self.htk[..., 1]
+        self.C3 = self.htk[..., 2]
+        self.C4 = self.htk[..., 3]
+        self.prd = io.imread(prd_path)
+        self.cyt_msk = io.imread(cyt_msk_path)
+        self.ncl_msk = io.imread(ncl_msk_path)
+        self.C1b_msk = io.imread(C1b_lbl_path) > 0
+        self.C2b_msk = io.imread(C2b_lbl_path) > 0
+        self.C3b_msk = io.imread(C3b_lbl_path) > 0
+        
+        # Get outlines (slow !!!)
+        self.cyt_out = get_outlines(self.cyt_msk)
+        self.ncl_out = get_outlines(self.ncl_msk)
+        self.C1b_out = get_outlines(self.C1b_msk)
+        self.C2b_out = get_outlines(self.C2b_msk)
+        self.C3b_out = get_outlines(self.C3b_msk)          
+
     def init_viewer(self):
         
         # Create viewer
         self.viewer = napari.Viewer()
+        
+        # Raws
+        
         self.viewer.add_image(
-            self.C1, name="NRP2", visible=True,
-            blending="additive", colormap="bop orange",
+            self.C1, name="C1", colormap="bop orange", visible=0,
+            blending="additive", 
             gamma=0.75,
             )
         self.viewer.add_image(
-            self.C2, name="virus", visible=False,
-            blending="additive", colormap="green",
+            self.C2, name="C2", colormap="bop blue", visible=0,
+            blending="additive", 
+            gamma=0.33,
             )
         self.viewer.add_image(
-            self.C3, name="EEA1", visible=False,
-            blending="additive", colormap="magenta",
+            self.C3, name="C3", colormap="bop purple", visible=0,
+            blending="additive",
+            gamma=0.33,
             )
         self.viewer.add_image(
-            self.C4, name="nuclei", visible=True,
-            blending="additive", colormap="bop blue",
+            self.C4, name="C4", colormap="blue", visible=0,
+            blending="additive", 
+            )
+        
+        # Predictions
+        
+        self.viewer.add_image(
+            self.prd, name="prd", colormap="turbo", visible=0,
+            rendering="attenuated_mip", attenuation=0.5, opacity=0.25,
+            )
+        
+        # Masks
+        
+        self.viewer.add_image(
+            self.cyt_msk, name="cyt_msk", colormap="gray", visible=1,
+            blending="translucent_no_depth", opacity=0.2,
+            rendering="attenuated_mip", attenuation=0.5, 
             )
         self.viewer.add_image(
-            self.cyt_msk, name="cyt_msk", visible=True,
-            rendering="attenuated_mip", attenuation=0.5, colormap="bop orange",
+            self.ncl_msk, name="ncl_msk", colormap="blue", visible=1,
+            blending="translucent_no_depth", opacity=0.2,
+            rendering="attenuated_mip", attenuation=0.5, 
+            )
+        
+        # Blobs
+        
+        self.viewer.add_image(
+            self.C1b_msk, name="C1b_msk", colormap="bop orange", visible=1,
+            blending="additive", opacity=0.75, 
+            rendering="attenuated_mip", attenuation=0.5, 
             )
         self.viewer.add_image(
-            self.ncl_msk, name="ncl_msk", visible=True,
-            rendering="attenuated_mip", attenuation=0.5, colormap="bop blue",
+            self.C2b_msk, name="C2b_msk", colormap="bop blue", visible=1,
+            blending="additive", opacity=0.75, 
+            rendering="attenuated_mip", attenuation=0.5, 
             )
+        self.viewer.add_image(
+            self.C3b_msk, name="C3b_msk", colormap="bop purple", visible=1,
+            blending="additive", opacity=0.75, 
+            rendering="attenuated_mip", attenuation=0.5, 
+            )
+        
+        # Outlines
+        
+        self.viewer.add_image(
+            self.cyt_out, name="cyt_out", colormap="gray", visible=0,
+            blending="additive", opacity=0.25, 
+            )
+        self.viewer.add_image(
+            self.ncl_out, name="ncl_out", colormap="gray", visible=0,
+            blending="additive", opacity=0.25, 
+            )
+        self.viewer.add_image(
+            self.C1b_out, name="C1b_out", colormap="gray", visible=0,
+            blending="additive", opacity=0.5, 
+            )
+        self.viewer.add_image(
+            self.C2b_out, name="C2b_out", colormap="gray", visible=0,
+            blending="additive", opacity=0.5, 
+            )
+        self.viewer.add_image(
+            self.C3b_out, name="C3b_out", colormap="gray", visible=0,
+            blending="additive", opacity=0.5,
+            )
+
         
         # 3D display
         self.viewer.dims.ndisplay = 3
         
-        # Create "select stack" menu
-        self.stk_group_box = QGroupBox("Select stack")
-        stk_group_layout = QVBoxLayout()
-        self.btn_next_image = QPushButton("Next Image")
-        self.btn_prev_image = QPushButton("Previous Image")
-        stk_group_layout.addWidget(self.btn_next_image)
-        stk_group_layout.addWidget(self.btn_prev_image)
-        self.stk_group_box.setLayout(stk_group_layout)
-        self.btn_next_image.clicked.connect(self.next_stack)
-        self.btn_prev_image.clicked.connect(self.prev_stack)
+        # Create "hstack" menu
+        self.htk_group_box = QGroupBox("Select hstack")
+        htk_group_layout = QVBoxLayout()
+        self.btn_next_htk = QPushButton("next")
+        self.btn_prev_htk = QPushButton("prev")
+        htk_group_layout.addWidget(self.btn_next_htk)
+        htk_group_layout.addWidget(self.btn_prev_htk)
+        self.htk_group_box.setLayout(htk_group_layout)
+        self.btn_next_htk.clicked.connect(self.next_hstack)
+        self.btn_prev_htk.clicked.connect(self.prev_hstack)
         
+        # Create "display" menu
+        self.dsp_group_box = QGroupBox("Display")
+        dsp_group_layout = QHBoxLayout()
+        self.rad_masks = QRadioButton("mask")
+        self.rad_predictions = QRadioButton("predictions")
+        self.rad_masks.setChecked(True)
+        dsp_group_layout.addWidget(self.rad_masks)
+        dsp_group_layout.addWidget(self.rad_predictions)
+        self.dsp_group_box.setLayout(dsp_group_layout)
+        self.rad_masks.toggled.connect(
+            lambda checked: self.show_masks() if checked else None)
+        self.rad_predictions.toggled.connect(
+            lambda checked: self.show_predictions() if checked else None)
+        
+        # Create "check" menu
+        self.chk_group_box = QGroupBox("Check blobs")
+        chk_group_layout = QHBoxLayout()
+        self.rad_chk_C1b = QRadioButton("C1")
+        self.rad_chk_C2b = QRadioButton("C2")
+        self.rad_chk_C3b = QRadioButton("C3")
+        chk_group_layout.addWidget(self.rad_chk_C1b)
+        chk_group_layout.addWidget(self.rad_chk_C2b)
+        chk_group_layout.addWidget(self.rad_chk_C3b)
+        self.chk_group_box.setLayout(chk_group_layout)
+        self.rad_chk_C1b.toggled.connect(
+            lambda checked: self.show_chk(tag="C1") if checked else None)
+        self.rad_chk_C2b.toggled.connect(
+            lambda checked: self.show_chk(tag="C2") if checked else None)
+        self.rad_chk_C3b.toggled.connect(
+            lambda checked: self.show_chk(tag="C3") if checked else None)
+
         # Create texts
-        self.info_image = QLabel()
-        self.info_image.setFont(QFont("Consolas"))
-        self.info_image.setText(
+        self.info_path = QLabel()
+        self.info_path.setFont(QFont("Consolas"))
+        self.info_path.setText(
             f"{self.paths[self.idx].name}"
+            )
+        self.info_shortcuts = QLabel()
+        self.info_shortcuts.setFont(QFont("Consolas"))
+        self.info_shortcuts.setText(
+            "prev/next stack  : page down/up \n"
             )
         
         # Create layout
         self.layout = QVBoxLayout()
-        self.layout.addWidget(self.stk_group_box)
+        self.layout.addWidget(self.htk_group_box)
+        self.layout.addWidget(self.dsp_group_box)
+        self.layout.addWidget(self.chk_group_box)
         self.layout.addSpacing(10)
-        self.layout.addWidget(self.info_image)
+        self.layout.addWidget(self.info_path)
+        self.layout.addWidget(self.info_shortcuts)
 
         # Create widget
         self.widget = QWidget()
@@ -247,36 +447,82 @@ class Display:
 
         @self.viewer.bind_key("PageDown", overwrite=True)
         def previous_image_key(viewer):
-            self.prev_stack()
+            self.prev_hstack()
         
         @self.viewer.bind_key("PageUp", overwrite=True)
         def next_image_key(viewer):
-            self.next_stack()
+            self.next_hstack()
         
-    def update_stack(self):
-        self.viewer.layers["NRP2"].data = self.C1
-        self.viewer.layers["virus"].data = self.C2
-        self.viewer.layers["EEA1"].data = self.C3
-        self.viewer.layers["nuclei"].data = self.C4
+    # Methods
+        
+    def update_layers(self):
+        self.viewer.layers["C1"].data = self.C1
+        self.viewer.layers["C2"].data = self.C2
+        self.viewer.layers["C3"].data = self.C3
+        self.viewer.layers["C4"].data = self.C4
+        self.viewer.layers["prd"].data = self.prd
         self.viewer.layers["cyt_msk"].data = self.cyt_msk
         self.viewer.layers["ncl_msk"].data = self.ncl_msk
+        self.viewer.layers["C1b_msk"].data = self.C1b_msk
+        self.viewer.layers["C2b_msk"].data = self.C2b_msk
+        self.viewer.layers["C3b_msk"].data = self.C3b_msk
+        self.viewer.layers["cyt_out"].data = self.cyt_out
+        self.viewer.layers["ncl_out"].data = self.ncl_out
+        self.viewer.layers["C1b_out"].data = self.C1b_out
+        self.viewer.layers["C2b_out"].data = self.C2b_out
+        self.viewer.layers["C3b_out"].data = self.C3b_out
         
     def update_text(self):
-        self.info_image.setText(f"{self.paths[self.idx].name}")
+        self.info_path.setText(f"{self.paths[self.idx].name}")
         
-    def next_stack(self):
+    def show_masks(self):
+        self.viewer.dims.ndisplay = 3
+        for name in self.viewer.layers:
+            name = str(name)
+            if "msk" in name:
+                self.viewer.layers[name].visible = 1
+            else:
+                self.viewer.layers[name].visible = 0
+    
+    def show_predictions(self):
+        self.viewer.dims.ndisplay = 3
+        for name in self.viewer.layers:
+            name = str(name)
+            if name in ["C1", "prd"]:
+                self.viewer.layers[name].visible = 1
+            else:
+                self.viewer.layers[name].visible = 0
+ 
+    def show_chk(self, tag="C1"):
+        self.viewer.dims.ndisplay = 2
+        for name in self.viewer.layers:
+            name = str(name)
+            if name in [f"{tag}", f"{tag}b_out", "cyt_out", "ncl_out"]:
+                self.viewer.layers[name].visible = 1
+            else:
+                self.viewer.layers[name].visible = 0
+        
+    # Shortcuts
+           
+    def next_hstack(self):
         if self.idx < len(self.paths) - 1:
             self.idx += 1
             self.init_data()
-            self.update_stack()
+            self.update_layers()
             self.update_text()
             
-    def prev_stack(self):
+    def prev_hstack(self):
         if self.idx > 0:
             self.idx -= 1
             self.init_data()
-            self.update_stack()
+            self.update_layers()
             self.update_text()
+            
+    def hide_layers(self):
+        pass
+    
+    def show_layers(self):
+        pass
 
 #%% Execute -------------------------------------------------------------------
 
@@ -286,21 +532,42 @@ if __name__ == "__main__":
 
     # Paths
     paths = []
-    for path in stk_paths:
+    for path in htk_paths:
         dir_path = Path(data_path / path.stem)
-        stk_path = list(dir_path.glob("*_stk.tif"))
-        if not stk_path or not stk_path[0].exists() or overwrite["preprocess"]:
+        htk_path = list(dir_path.glob("*_htk.tif"))
+        if not htk_path or not htk_path[0].exists() or overwrite["preprocess"]:
             paths.append(path)
     
     print("preprocess : ", end="", flush=True)
     t0 = time.time()
     
     # Execute
-    Parallel(n_jobs=-1)(
-        delayed(preprocess)(path, rf=rf) 
-        for path in paths
-        )  
+    if paths:
+        Parallel(n_jobs=-1)(
+            delayed(preprocess)(path, rf=rf) 
+            for path in paths
+            )  
     
+    t1 = time.time()
+    print(f"{t1 - t0:.3f}s")
+    
+    # Predict -----------------------------------------------------------------
+    
+    # Paths
+    paths = []
+    for path in htk_paths:
+        dir_path = Path(data_path / path.stem)
+        prd_path = list(dir_path.glob("*_prd.tif"))
+        if not prd_path or not prd_path[0].exists() or overwrite["predict"]:
+            paths.append(path)
+    
+    print("predict    : ", end="", flush=True)
+    t0 = time.time()
+    
+    if paths:
+        for path in paths:
+            predict(path)   
+        
     t1 = time.time()
     print(f"{t1 - t0:.3f}s")
     
@@ -308,10 +575,10 @@ if __name__ == "__main__":
 
     # Paths
     paths = []
-    for path in stk_paths:
+    for path in htk_paths:
         dir_path = Path(data_path / path.stem)
-        cyt_med_path = list(dir_path.glob("*_cyt_med.tif"))
-        if not cyt_med_path or not cyt_med_path[0].exists() or overwrite["process"]:
+        cyt_msk_path = list(dir_path.glob("*_cyt_msk.tif"))
+        if not cyt_msk_path or not cyt_msk_path[0].exists() or overwrite["process"]:
             paths.append(path)
 
     print("process    : ", end="", flush=True)
@@ -320,8 +587,11 @@ if __name__ == "__main__":
     if paths:
         process(
             paths, 
-            cyt_coeff=cyt_coeff,
-            ncl_coeff=ncl_coeff,
+            cyt_thresh=cyt_thresh,
+            ncl_thresh=ncl_thresh,
+            C1b_thresh=C1b_thresh,
+            C2b_thresh=C2b_thresh,
+            C3b_thresh=C3b_thresh,
             )
         
     t1 = time.time()
@@ -329,53 +599,4 @@ if __name__ == "__main__":
     
     # Display -----------------------------------------------------------------
     
-    Display(stk_paths)
-
-#%%
-
-    # # Threshold
-    # cyts_thresh = threshold_otsu(np.concatenate(cyts, axis=0))
-    # ncls_thresh = threshold_otsu(np.concatenate(ncls, axis=0))
-    # cyts_med_thresh = threshold_otsu(np.concatenate(cyts_med, axis=0))
-    # ncls_med_thresh = threshold_otsu(np.concatenate(ncls_med, axis=0))
-    
-#%%
-
-    # from skimage.filters import threshold_otsu
-    # from skimage.morphology import remove_small_objects    
-    
-    # # Load data
-    # stk = process(paths[4])
-    # # voxsize = 
-    
-    # # Format data
-    # cyt = (norm_pct(stk[..., 0]) * 255).astype("uint8")
-    # ncl = (norm_pct(stk[..., 3]) * 255).astype("uint8")
-    # cyt = median(cyt, footprint=ball(5))
-    # ncl = median(ncl, footprint=ball(5))
-    # cyt_thresh = threshold_otsu(cyt)
-    # ncl_thresh = threshold_otsu(ncl)
-    # cyt_msk = cyt > cyt_thresh
-    # ncl_msk = ncl > ncl_thresh
-    # cyt_msk = remove_small_objects(cyt_msk, min_size=1e4)
-    # ncl_msk = remove_small_objects(ncl_msk, min_size=1e4)
-    
-    # # Display
-    # viewer = napari.Viewer()
-    # viewer.dims.ndisplay = 3
-    # viewer.add_image(
-    #     cyt, name="cyt", visible=1,
-    #     blending="additive", colormap="bop orange",
-    #     )
-    # viewer.add_image(
-    #     ncl, name="nuclei", visible=1,
-    #     blending="additive", colormap="bop blue",
-    #     )
-    # viewer.add_image(
-    #     cyt_msk, name="cyt_msk", visible=0,
-    #     rendering="attenuated_mip", attenuation=0.5, colormap="bop orange",
-    #     )
-    # viewer.add_image(
-    #     ncl_msk, name="ncl_msk", visible=0,
-    #     rendering="attenuated_mip", attenuation=0.5, colormap="bop blue",
-    #     )
+    Display(htk_paths)
