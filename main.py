@@ -38,11 +38,6 @@ from qtpy.QtWidgets import (
 #%% Comments ------------------------------------------------------------------
 
 '''
-Current:
-- improve check display and rendering speed
-'''
-
-'''
 - C1 : NRP2-EGFP (protein of interest)
 - C2 : AF594-labelled virus
 - C3 : EEA1 (early endosome marker)
@@ -55,7 +50,7 @@ Current:
 overwrite = {
     "preprocess" : 0,
     "predict"    : 0,
-    "process"    : 1,
+    "process"    : 0,
     }
 
 # Parameters
