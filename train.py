@@ -6,7 +6,7 @@ from skimage import io
 from pathlib import Path
 
 # functions
-from functions import format_stack, prepare_stack
+from functions import import_htk, prepare_htk
 
 # bdtools
 from bdtools.models.annotate import Annotate
@@ -15,8 +15,8 @@ from bdtools.models.unet import UNet
 #%% Inputs --------------------------------------------------------------------
 
 # Procedure
-annotate = 0
-train = 1
+annotate = 1
+train = 0
 predict = 0
 
 # UNet build()
@@ -55,7 +55,7 @@ rf = 0.5
 #%% Initialize ----------------------------------------------------------------
 
 data_path = Path("D:\local_Suzuki\data")
-stk_paths = list(data_path.glob("*.nd2"))   
+htk_paths = list(data_path.glob("*.nd2"))   
 train_path = Path("data", "train")
 
 #%% Execute -------------------------------------------------------------------
@@ -116,20 +116,20 @@ if __name__ == "__main__":
             
             )
         
-    if predict:
+    # if predict:
         
-        # Format and merge stack
-        path = stk_paths[1]
-        stk, voxsize = format_stack(path, rf=rf)
-        mrg = prepare_stack(stk)
+    #     # Format and merge stack
+    #     path = htk_paths[1]
+    #     _, htk = format_stack(path, voxsize=voxsize)
+    #     mrg = prepare_stack(stk)
         
-        # Predict
-        unet = UNet(
-            load_name="model_512_normal_1000-160_2",
-            )
-        prd = unet.predict(mrg, verbose=3)
+    #     # Predict
+    #     unet = UNet(
+    #         load_name="model_512_normal_1000-160_2",
+    #         )
+    #     prd = unet.predict(mrg, verbose=3)
                 
-        # Display
-        viewer = napari.Viewer()
-        viewer.add_image(mrg)
-        viewer.add_image(prd)
+    #     # Display
+    #     viewer = napari.Viewer()
+    #     viewer.add_image(mrg)
+    #     viewer.add_image(prd)
