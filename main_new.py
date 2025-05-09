@@ -36,13 +36,21 @@ from qtpy.QtWidgets import (
 # matplotlib
 import matplotlib.pyplot as plt 
 
+#%% Comments ------------------------------------------------------------------
+
+'''
+- The current procedure for sorting the blobs does only works for 2obj 
+
+'''
+
 #%% Inputs --------------------------------------------------------------------
 
 procedure = {
     "extract" : 0,
     "predict" : 0,
     "process" : 0,
-    "display" : 1,
+    "analyse" : 1,
+    "display" : 0,
     }
 
 parameters = {
@@ -177,6 +185,8 @@ class Main:
             self.predict() 
         if self.procedure["process"]:
             self.process() 
+        if self.procedure["analyse"]:
+            self.analyse() 
         
 #%% Class(Main) : initialize() ------------------------------------------------
 
@@ -384,9 +394,9 @@ class Main:
                 return lbl, prp
             else:
                 return lbl
-            
+                        
         def _process(path):
-            
+
             # Load data
             out_path = path.parent / path.stem
             data = load_data(out_path)
@@ -405,20 +415,22 @@ class Main:
                         
                 # Save
                 save_tif(
-                    (cyt_msk * 255).astype("uint8"), 
-                    out_path / "cyt_msk.tif", 
-                    data["metadata"]["voxsize1"][0],
-                    )   
-                save_tif(
-                    (ncl_msk * 255).astype("uint8"), 
-                    out_path / "ncl_msk.tif", 
-                    data["metadata"]["voxsize1"][0],
-                    )   
-                save_tif(
                     blb_lbl.astype("uint16"), 
                     out_path / f"C{c + 1}_lbl.tif", 
                     data["metadata"]["voxsize1"][0],
                     )   
+            
+            # Save
+            save_tif(
+                (cyt_msk * 255).astype("uint8"), 
+                out_path / "cyt_msk.tif", 
+                data["metadata"]["voxsize1"][0],
+                )   
+            save_tif(
+                (ncl_msk * 255).astype("uint8"), 
+                out_path / "ncl_msk.tif", 
+                data["metadata"]["voxsize1"][0],
+                )   
 
         # ---------------------------------------------------------------------
         
@@ -433,6 +445,58 @@ class Main:
         t1 = time.time()
         print(f"{t1 - t0:.3f}s")
         
+#%% Class(Main) : analyse() ---------------------------------------------------
+
+    def analyse(self): 
+        
+        def get_blobs_int(lbl, img):
+            lbl_f = lbl.ravel()
+            img_f = img.ravel()        
+            counts = np.bincount(lbl_f)
+            sum_img = np.bincount(lbl_f, weights=img_f)
+            idx = np.nonzero(counts)[0]
+            idx = idx[idx != 0]  
+            return (idx, sum_img[idx] / counts[idx])
+        
+        def _analyse(path):
+            
+            # Load data
+            out_path = path.parent / path.stem
+            data = load_data(out_path)
+            
+            # 
+            vals = get_blobs_int(data["C2_lbl"], data["C3_lbl"] > 0)
+            lbls = vals[0][vals[1] == 0]
+            mask = np.isin(data["C2_lbl"], lbls)
+            C2_lbl_f = data["C2_lbl"].copy()
+            C2_lbl_f[mask == 0] = 0
+            
+            # mask = np.isin(labeled_array, labels_to_keep)
+
+            # # Apply the mask: keep only the desired labels, set others to 0 (background)
+            # filtered_array = np.where(mask, labeled_array, 0)
+            
+            self.vals = vals
+            self.lbls = lbls
+            self.C2_lbl = data["C2_lbl"]
+            self.C2_lbl_f = C2_lbl_f
+        
+        # ---------------------------------------------------------------------
+        
+        t0 = time.time()
+        print("analyse() : ", end="", flush=False)
+        
+        _analyse(self.htk_paths[0])
+        
+        # Parallel(n_jobs=-1)(
+        #     delayed(_analyse)(path) 
+        #     for path in self.htk_paths
+        #     ) 
+        
+        t1 = time.time()
+        print(f"{t1 - t0:.3f}s")
+        
+
 #%% Class(Display) ------------------------------------------------------------
     
 class Display:
@@ -770,46 +834,57 @@ if __name__ == "__main__":
     main = Main()
     display = Display()
     
+    vals = main.vals
+    lbls = main.lbls
+    C2_lbl = main.C2_lbl
+    C2_lbl_f = main.C2_lbl_f
+    
+    # Display
+    viewer = napari.Viewer()
+    viewer.add_image(C2_lbl > 0)
+    viewer.add_image(C2_lbl_f > 0)
+    
 #%%
 
-    idx = 5
+    # idx = 5
 
-    def get_obj_int(lbl, img):
-        lbl_f = lbl.ravel()
-        img_f = img.ravel()        
-        counts = np.bincount(lbl_f)
-        sum_img = np.bincount(lbl_f, weights=img_f)
-        idx = np.nonzero(counts)[0]
-        idx = idx[idx != 0]  
-        return (idx, sum_img[idx] / counts[idx])
+    # def get_obj_int(lbl, img):
+    #     lbl_f = lbl.ravel()
+    #     img_f = img.ravel()        
+    #     counts = np.bincount(lbl_f)
+    #     sum_img = np.bincount(lbl_f, weights=img_f)
+    #     idx = np.nonzero(counts)[0]
+    #     idx = idx[idx != 0]  
+    #     return (idx, sum_img[idx] / counts[idx])
         
-    cyt_msk = display.data[idx]["cyt_msk"]
-    ncl_msk = display.data[idx]["ncl_msk"]
-    C2_lbl  = display.data[idx]["C2_lbl"]
-    C3_lbl  = display.data[idx]["C3_lbl"]
+    # cyt_msk = display.data[idx]["cyt_msk"]
+    # ncl_msk = display.data[idx]["ncl_msk"]
+    # C1_lbl  = display.data[idx]["C1_lbl"]
+    # C2_lbl  = display.data[idx]["C2_lbl"]
+    # C3_lbl  = display.data[idx]["C3_lbl"]
     
-    t0 = time.time()
-    print("get_edt() : ", end="", flush=False)
+    # t0 = time.time()
+    # print("get_edt() : ", end="", flush=False)
     
-    cyt_edt = get_edt(cyt_msk > 0)
+    # cyt_edt = get_edt(cyt_msk > 0)
     
-    t1 = time.time()
-    print(f"{t1 - t0:.3f}s")
+    # t1 = time.time()
+    # print(f"{t1 - t0:.3f}s")
     
-    t0 = time.time()
-    print("get_obj_int() : ", end="", flush=False)
+    # t0 = time.time()
+    # print("get_obj_int() : ", end="", flush=False)
     
-    val_C3  = get_obj_int(C2_lbl, (C3_lbl > 0))
-    val_edt = get_obj_int(C2_lbl, cyt_edt)
+    # val_C3  = get_obj_int(C2_lbl, (C3_lbl > 0))
+    # val_edt = get_obj_int(C2_lbl, cyt_edt)
     
-    t1 = time.time()
-    print(f"{t1 - t0:.3f}s")
+    # t1 = time.time()
+    # print(f"{t1 - t0:.3f}s")
     
-    # Plot 
-    fig, ax = plt.subplots(1, 1, figsize=(6, 4))   
-    ax.scatter(val_C3[1], val_edt[1])
-    ax.set_ylabel("edt")
-    ax.set_xlabel("C3")
+    # # Plot 
+    # fig, ax = plt.subplots(1, 1, figsize=(6, 4))   
+    # ax.scatter(val_C3[1], val_edt[1])
+    # ax.set_ylabel("edt")
+    # ax.set_xlabel("C3")
     
 #%%    
         
