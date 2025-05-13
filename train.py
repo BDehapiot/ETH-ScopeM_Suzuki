@@ -9,14 +9,15 @@ from pathlib import Path
 from functions import import_htk, prepare_htk
 
 # bdtools
+from bdtools.norm import norm_pct
 from bdtools.models.annotate import Annotate
 from bdtools.models.unet import UNet
 
 #%% Inputs --------------------------------------------------------------------
 
 # Procedure
-annotate = 1
-train = 0
+annotate = 0
+train = 1
 predict = 0
 
 # UNet build()
@@ -25,7 +26,8 @@ activation = "sigmoid"
 downscale_factor = 3
 
 # UNet train()
-preview = False
+preview = 0
+load_name = ""
 
 # preprocess
 patch_size = 512
@@ -58,6 +60,29 @@ data_path = Path("D:\local_Suzuki\data")
 htk_paths = list(data_path.glob("*.nd2"))   
 train_path = Path("data", "train")
 
+#%% Function(s) ---------------------------------------------------------------
+
+def prepare_data(imgs, msks):
+    nYs = [img.shape[0] for img in imgs]
+    nXs = [img.shape[1] for img in imgs]
+    nY_max = np.max(nYs)
+    nX_max = np.max(nXs)
+    imgs_pad, msks_pad = [], []
+    for img, msk in zip(imgs, msks):
+        img = norm_pct(img) 
+        nY, nX = img.shape
+        y_pad = nY_max - nY if nY < nY_max else 0
+        x_pad = nX_max - nX if nX < nX_max else 0
+        pad_width = (
+            (y_pad // 2, y_pad // 2), 
+            (x_pad // 2, x_pad // 2),
+            )
+        imgs_pad.append(np.pad(img, pad_width, mode='reflect'))
+        msks_pad.append(np.pad(msk, pad_width, mode='reflect'))
+    imgs_pad = np.stack(imgs_pad)
+    msks_pad = np.stack(msks_pad)
+    return imgs_pad, msks_pad
+
 #%% Execute -------------------------------------------------------------------
 
 if __name__ == "__main__":
@@ -69,22 +94,24 @@ if __name__ == "__main__":
     
         # Load data
         imgs, msks = [], []
-        for path in list(train_path.glob("*.tif")):
+        for path in list(train_path.rglob("*.tif")):
             if "mask" in path.name:
                 msks.append(io.imread(path))   
                 imgs.append(io.imread(str(path).replace("_mask", "")))
-        imgs = np.stack(imgs)
-        msks = np.stack(msks)
-         
+
+        # Prepare data
+        imgs, msks = prepare_data(imgs, msks)
+
         unet = UNet(
             save_name="",
-            load_name="",
+            load_name=load_name,
             root_path=Path.cwd(),
             backbone=backbone,
             classes=1,
             activation=activation,
             )
         
+        # Train
         unet.train(
             
             imgs, msks, 

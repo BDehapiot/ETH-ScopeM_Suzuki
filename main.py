@@ -45,17 +45,17 @@ import matplotlib.pyplot as plt
 
 procedure = {
     "extract" : 0,
-    "predict" : 0,
+    "predict" : 1,
     "process" : 0,
     "analyse" : 0,
-    "display" : 1,
+    "display" : 0,
     }
 
 parameters = {
     
     # Paths
     "data_path"   : Path("D:\local_Suzuki\data"),
-    "model_name"  : "model_512_normal_2000-160_3",
+    "model_name"  : "model_512_normal_2000-888_2",
     "tags"        : ["2OBJ"],
     
     # Parameters
@@ -130,11 +130,14 @@ class Main:
             # Setup directory
             out_path = path.parent / path.stem        
             if out_path.exists():
-                for item in out_path.iterdir():
-                    if item.is_file() or item.is_symlink():
-                        item.unlink()
-                    elif item.is_dir():
-                        shutil.rmtree(item)
+                if self.procedure["extract"] == 1:
+                    return
+                elif self.procedure["extract"] == 2:
+                    for item in out_path.iterdir():
+                        if item.is_file() or item.is_symlink():
+                            item.unlink()
+                        elif item.is_dir():
+                            shutil.rmtree(item)
             else:
                 out_path.mkdir(parents=True, exist_ok=True)
                     
@@ -186,20 +189,27 @@ class Main:
                         
             # Load data
             out_path = path.parent / path.stem
-            data = load_data(out_path)
+            prd_path = out_path / "prd.tif"
+            if prd_path.exists() and self.procedure["predict"] == 1:
             
-            # Prepare
-            prp = prepare_htk(data["htk"])
+                continue
             
-            # Predict
-            prd = unet.predict(prp, verbose=0)
-            
-            # Save
-            prd = (prd * 255).astype("uint8")
-            save_tif(
-                prd, out_path / "prd.tif", 
-                voxsize=data["metadata"]["vsize1"][0],
-                )         
+            else:
+                
+                data = load_data(out_path)
+                
+                # Prepare
+                prp = prepare_htk(data["htk"])
+                
+                # Predict
+                prd = unet.predict(prp, verbose=0)
+                
+                # Save
+                prd = (prd * 255).astype("uint8")
+                save_tif(
+                    prd, out_path / "prd.tif", 
+                    voxsize=data["metadata"]["vsize1"][0],
+                    )         
             
         t1 = time.time()
         print(f"{t1 - t0:.3f}s")
