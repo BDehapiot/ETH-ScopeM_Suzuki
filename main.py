@@ -38,6 +38,7 @@ import matplotlib.pyplot as plt
 
 '''
 - The current procedure for sorting the blobs does only works for 2obj 
+- The analyse part is not tune to differ from procedure["analyse"] = 1 or 2
 
 '''
 
@@ -45,23 +46,23 @@ import matplotlib.pyplot as plt
 
 procedure = {
     "extract" : 0,
-    "predict" : 1,
-    "process" : 0,
-    "analyse" : 0,
-    "display" : 0,
+    "predict" : 0,
+    "process" : 2,
+    "analyse" : 1,
+    "display" : 1,
     }
 
 parameters = {
     
     # Paths
     "data_path"   : Path("D:\local_Suzuki\data"),
-    "model_name"  : "model_512_normal_2000-888_2",
+    "model_name"  : "model_512_normal_2000-160_3",
     "tags"        : ["2OBJ"],
     
     # Parameters
     "voxsize"     : 0.2,
-    "cyt_thresh"  : 0.05,
-    "ncl_thresh"  : 0.15,
+    "cyt_thresh"  : 0.05, # 0.05
+    "ncl_thresh"  : 0.15, # 0.15
     "blb_threshs" : {
         "2obj"    : [0.75, 0.33, 0.25], # C1, C2, C3
         "3obj"    : [0.75, 0.33, 0.25], # C1, C2, C3
@@ -128,7 +129,7 @@ class Main:
         def _extract(path):
             
             # Setup directory
-            out_path = path.parent / path.stem        
+            out_path = path.parent / path.stem 
             if out_path.exists():
                 if self.procedure["extract"] == 1:
                     return
@@ -276,38 +277,46 @@ class Main:
 
             # Load data
             out_path = path.parent / path.stem
-            data = load_data(out_path)
+            cyt_msk_path = out_path / "ncl_msk.tif"
+        
+            if cyt_msk_path.exists() and self.procedure["process"] == 1:
             
-            # Get masks
-            cyt_msk, ncl_msk = get_masks(data["htk"], data["prd"])
+                return
             
-            for c in range(3):
+            else:
                 
-                # Get blobs
-                blb_lbl = get_blobs(
-                    data["htk"][:, c, ...], mask=cyt_msk, 
-                    sigma0=0.5, sigma1=5, 
-                    thresh=self.parameters["blb_threshs"][self.exp][c]
-                    )
-                        
+                data = load_data(out_path)
+                
+                # Get masks
+                cyt_msk, ncl_msk = get_masks(data["htk"], data["prd"])
+                
+                for c in range(3):
+                    
+                    # Get blobs
+                    blb_lbl = get_blobs(
+                        data["htk"][:, c, ...], mask=cyt_msk, 
+                        sigma0=0.5, sigma1=5, 
+                        thresh=self.parameters["blb_threshs"][self.exp][c]
+                        )
+                            
+                    # Save
+                    save_tif(
+                        blb_lbl.astype("uint16"), 
+                        out_path / f"C{c + 1}_lbl.tif", 
+                        voxsize=data["metadata"]["vsize1"][0],
+                        )   
+                
                 # Save
                 save_tif(
-                    blb_lbl.astype("uint16"), 
-                    out_path / f"C{c + 1}_lbl.tif", 
+                    (cyt_msk * 255).astype("uint8"), 
+                    out_path / "cyt_msk.tif", 
                     voxsize=data["metadata"]["vsize1"][0],
                     )   
-            
-            # Save
-            save_tif(
-                (cyt_msk * 255).astype("uint8"), 
-                out_path / "cyt_msk.tif", 
-                voxsize=data["metadata"]["vsize1"][0],
-                )   
-            save_tif(
-                (ncl_msk * 255).astype("uint8"), 
-                out_path / "ncl_msk.tif", 
-                voxsize=data["metadata"]["vsize1"][0],
-                )   
+                save_tif(
+                    (ncl_msk * 255).astype("uint8"), 
+                    out_path / "ncl_msk.tif", 
+                    voxsize=data["metadata"]["vsize1"][0],
+                    )   
 
         # ---------------------------------------------------------------------
         

@@ -143,20 +143,20 @@ if __name__ == "__main__":
             
             )
         
-    # if predict:
+    if predict:
         
-    #     # Format and merge stack
-    #     path = htk_paths[1]
-    #     _, htk = format_stack(path, voxsize=voxsize)
-    #     mrg = prepare_stack(stk)
+        # Format and merge stack
+        path = htk_paths[1]
+        _, htk = format_stack(path, voxsize=voxsize)
+        mrg = prepare_stack(stk)
         
-    #     # Predict
-    #     unet = UNet(
-    #         load_name="model_512_normal_1000-160_2",
-    #         )
-    #     prd = unet.predict(mrg, verbose=3)
+        # Predict
+        unet = UNet(
+            load_name="model_512_normal_1000-160_2",
+            )
+        prd = unet.predict(mrg, verbose=3)
                 
-    #     # Display
-    #     viewer = napari.Viewer()
-    #     viewer.add_image(mrg)
-    #     viewer.add_image(prd)
+        # Display
+        viewer = napari.Viewer()
+        viewer.add_image(mrg)
+        viewer.add_image(prd)
