@@ -16,8 +16,8 @@ from bdtools.models.unet import UNet
 #%% Inputs --------------------------------------------------------------------
 
 # Procedure
-annotate = 0
-train = 1
+annotate = 1
+train = 0
 predict = 0
 
 # UNet build()
@@ -27,7 +27,7 @@ downscale_factor = 3
 
 # UNet train()
 preview = 0
-load_name = ""
+load_name = "model_512_normal_2000-720_3"
 
 # preprocess
 patch_size = 512
@@ -88,6 +88,7 @@ def prepare_data(imgs, msks):
 if __name__ == "__main__":
     
     if annotate:
+        
         Annotate(train_path)
     
     if train:
@@ -96,8 +97,9 @@ if __name__ == "__main__":
         imgs, msks = [], []
         for path in list(train_path.rglob("*.tif")):
             if "mask" in path.name:
-                msks.append(io.imread(path))   
-                imgs.append(io.imread(str(path).replace("_mask", "")))
+                if Path(str(path).replace("_mask", "")).exists():
+                    msks.append(io.imread(path))   
+                    imgs.append(io.imread(str(path).replace("_mask", "")))
 
         # Prepare data
         imgs, msks = prepare_data(imgs, msks)
@@ -143,20 +145,20 @@ if __name__ == "__main__":
             
             )
         
-    if predict:
+    # if predict:
         
-        # Format and merge stack
-        path = htk_paths[1]
-        _, htk = format_stack(path, voxsize=voxsize)
-        mrg = prepare_stack(stk)
+    #     # Format and merge stack
+    #     path = htk_paths[1]
+    #     _, htk = format_stack(path, voxsize=voxsize)
+    #     mrg = prepare_stack(stk)
         
-        # Predict
-        unet = UNet(
-            load_name="model_512_normal_1000-160_2",
-            )
-        prd = unet.predict(mrg, verbose=3)
+    #     # Predict
+    #     unet = UNet(
+    #         load_name="model_512_normal_1000-160_2",
+    #         )
+    #     prd = unet.predict(mrg, verbose=3)
                 
-        # Display
-        viewer = napari.Viewer()
-        viewer.add_image(mrg)
-        viewer.add_image(prd)
+    #     # Display
+    #     viewer = napari.Viewer()
+    #     viewer.add_image(mrg)
+    #     viewer.add_image(prd)

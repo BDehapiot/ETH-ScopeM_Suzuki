@@ -23,9 +23,9 @@ htk_paths = list(data_path.rglob("*.nd2"))
 #%% Function(s) ---------------------------------------------------------------
 
 def extract(paths, voxsize=0.2, nSlices=5):
-    
-    for path in paths:
-        
+
+    for i, path in enumerate(paths):
+                
         if any(tag not in path.stem for tag in tags_out):
         
             print("\n" + "load : " + path.name)    
@@ -44,11 +44,7 @@ def extract(paths, voxsize=0.2, nSlices=5):
                 save_name = path.stem + "_" + suffix + ".tif"
                 save_path = train_path / save_name
                 print(suffix, end=", ", flush=False)
-                save_tif(
-                    (prp[idx, ...] * 255).astype("uint8"), 
-                    save_path, 
-                    voxsize=voxsize
-                    )
+                save_tif(prp[idx, ...], save_path, voxsize=voxsize)
         
 #%% Execute -------------------------------------------------------------------
 

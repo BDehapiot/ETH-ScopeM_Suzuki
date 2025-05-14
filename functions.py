@@ -71,9 +71,12 @@ def import_htk(path, voxsize=0.2):
         
     # Load & rescale hstack
     shape0 = htk.shape
-    htk = rescale(htk, (1, 1, rfi, rfi),   order=0) # iso
+    htk = rescale(htk, (  1, 1, rfi, rfi), order=0) # iso
     htk = rescale(htk, (rfc, 1, rfc, rfc), order=0) # custom
     shape1 = htk.shape    
+    
+    # Convert to "uint8" (from 0-4095 to 0-255)
+    htk = (htk // 16).astype("uint8")
     
     # Flip z axis
     htk = np.flip(htk, axis=0)
@@ -97,11 +100,23 @@ def import_htk(path, voxsize=0.2):
 
 #%% Function : prepare_htk() --------------------------------------------------
 
+# def prepare_htk(htk):
+#     C1, C4 = htk[:, 0, ...], htk[:, 3, ...]
+#     mrg = (C1 + C4) / 2
+#     max0 = np.max(mrg)
+#     mrg = adjust_gamma(mrg, gamma=0.5)
+#     max1 = np.max(mrg)
+#     mrg *= max0 / max1 
+#     return mrg.astype("uint8")
+
 def prepare_htk(htk):
     C1, C4 = htk[:, 0, ...], htk[:, 3, ...]
-    C1 = adjust_gamma(norm_pct(C1), gamma=0.5)
-    C4 = adjust_gamma(norm_pct(C4), gamma=0.5)
-    return (C1 + C4) / 3
+    mrg = (C1 + C4) / 2
+    # max0 = np.max(mrg)
+    # mrg = adjust_gamma(mrg, gamma=0.5)
+    # max1 = np.max(mrg)
+    # mrg *= max0 / max1 
+    return mrg.astype("uint8")
 
 #%% Function : save_tif() -----------------------------------------------------
     
