@@ -2,6 +2,7 @@
 
 import nd2
 import pickle
+import warnings   
 import tifffile
 import numpy as np
 from skimage import io
@@ -48,38 +49,126 @@ mapping = {
 
 #%% Function : import_htk() ---------------------------------------------------
 
-def import_htk(path, voxsize=0.2):
+# def import_htk(path, voxsize=0.2):
     
+#     if "2OBJ" in path.name: exp = "2obj"
+#     if "3OBJ" in path.name: exp = "3obj"
+                
+#     with nd2.ND2File(path) as ndfile:
+        
+#         # vsize_in
+#         vsize0 = (
+#             ndfile.voxel_size()[2],
+#             ndfile.voxel_size()[1],
+#             ndfile.voxel_size()[0],
+#             )
+        
+#         # Load 
+#         htk = ndfile.asarray()
+        
+#     # Determine rescaling factors (rfi & rfc)
+#     rfi = vsize0[1] / vsize0[0]
+#     rfc = vsize0[0] / voxsize
+        
+#     # Load & rescale hstack
+#     shape0 = htk.shape
+#     htk = rescale(htk, (  1, 1, rfi, rfi), order=0) # iso
+#     htk = rescale(htk, (rfc, 1, rfc, rfc), order=0) # custom
+#     shape1 = htk.shape    
+    
+#     # Convert to "uint8" (from 0-4095 to 0-255)
+#     htk = (htk // 16).astype("uint8")
+    
+#     # Flip z axis
+#     htk = np.flip(htk, axis=0)
+    
+#     # Metadata
+#     cond = path.stem.split("_")[5]
+#     chn1 = path.stem.split("_")[4]
+#     chn_names = mapping["chn_names"][exp]
+#     chn_names[0] = mapping[chn1]
+#     metadata = {
+#         "path"      : path,
+#         "cond"      : mapping[cond],
+#         "chn_names" : chn_names,
+#         "shape0"    : shape0,
+#         "shape1"    : shape1,
+#         "vsize0"    : vsize0,
+#         "vsize1"    : (voxsize,) * 3,
+#         }
+                            
+#     return metadata, htk
+
+#%% Function : import_nd2() ---------------------------------------------------
+
+def check_nd2(path):
+    
+    # Initialize
+    warnings.filterwarnings(
+        "ignore", 
+        message="ND2File file not closed before garbage collection"
+        )
+    
+    with nd2.ND2File(path) as f:
+        darr = f.to_dask()
+    
+    return darr.shape
+
+def import_nd2(path, z="all", c="all", voxsize=0.2):
+    
+    # Initialize
     if "2OBJ" in path.name: exp = "2obj"
     if "3OBJ" in path.name: exp = "3obj"
-                
-    with nd2.ND2File(path) as ndfile:
+    zi = slice(None) if z == "all" else z 
+    ci = slice(None) if c == "all" else c 
+    warnings.filterwarnings(
+        "ignore", 
+        message="ND2File file not closed before garbage collection"
+        )
+                    
+    with nd2.ND2File(path) as f:
         
-        # vsize_in
+        # Input voxel size (vsize0)
         vsize0 = (
-            ndfile.voxel_size()[2],
-            ndfile.voxel_size()[1],
-            ndfile.voxel_size()[0],
+            f.voxel_size()[2],
+            f.voxel_size()[1],
+            f.voxel_size()[0],
             )
         
-        # Load 
-        htk = ndfile.asarray()
-        
+        # Load        
+        darr = f.to_dask()
+        arr  = darr[zi, ci, ...].compute()
+    
     # Determine rescaling factors (rfi & rfc)
     rfi = vsize0[1] / vsize0[0]
     rfc = vsize0[0] / voxsize
-        
-    # Load & rescale hstack
-    shape0 = htk.shape
-    htk = rescale(htk, (  1, 1, rfi, rfi), order=0) # iso
-    htk = rescale(htk, (rfc, 1, rfc, rfc), order=0) # custom
-    shape1 = htk.shape    
+    if arr.ndim == 4:
+        rscale0 = (1, 1, rfi, rfi)
+        rscale1 = (rfc, 1, rfc, rfc)
+    if arr.ndim == 3 and z == "all":
+        rscale0 = (1, rfi, rfi)
+        rscale1 = (rfc, rfc, rfc)
+    if arr.ndim == 3 and c == "all":
+        rscale0 = (1, rfi, rfi)
+        rscale1 = (1, rfc, rfc)
+    if arr.ndim == 2:
+        rscale0 = (rfi, rfi)
+        rscale1 = (rfc, rfc)
+    
+    # Rescale array
+    shape0 = arr.shape
+    arr = rescale(arr, rscale0, order=0) # iso
+    arr = rescale(arr, rscale1, order=0) # custom
+    shape1 = arr.shape   
     
     # Convert to "uint8" (from 0-4095 to 0-255)
-    htk = (htk // 16).astype("uint8")
+    arr = (arr // 16)
+    arr = np.clip(arr, 0, 255)
+    arr = arr.astype("uint8")
     
     # Flip z axis
-    htk = np.flip(htk, axis=0)
+    # if arr.ndim == 4:
+    #     arr = np.flip(arr, axis=0)
     
     # Metadata
     cond = path.stem.split("_")[5]
@@ -96,7 +185,7 @@ def import_htk(path, voxsize=0.2):
         "vsize1"    : (voxsize,) * 3,
         }
                             
-    return metadata, htk
+    return metadata, arr
 
 #%% Function : prepare_htk() --------------------------------------------------
 
@@ -109,14 +198,9 @@ def import_htk(path, voxsize=0.2):
 #     mrg *= max0 / max1 
 #     return mrg.astype("uint8")
 
-def prepare_htk(htk):
-    C1, C4 = htk[:, 0, ...], htk[:, 3, ...]
-    mrg = (C1 + C4) / 2
-    # max0 = np.max(mrg)
-    # mrg = adjust_gamma(mrg, gamma=0.5)
-    # max1 = np.max(mrg)
-    # mrg *= max0 / max1 
-    return mrg.astype("uint8")
+def prepare_data(C1, C4):
+    mrg = np.maximum(C1, C4)
+    return mrg
 
 #%% Function : save_tif() -----------------------------------------------------
     
@@ -176,15 +260,33 @@ def load_data(out_path):
 
 if __name__ == "__main__":
     
-    idx = 0
-    data_path = Path("D:\local_Suzuki\data\\2obj")
-    htk_paths = list(data_path.rglob("*.nd2"))
+    import time
+
+    data_path = Path(r"\\scopem-idadata.ethz.ch\BDehapiot\remote_Suzuki\data")
+    nd2_paths = list(data_path.rglob("*.nd2"))  
     
-    # Load
-    metadata, htk = import_htk(htk_paths[idx], vsize1=0.2)
-    prp = prepare_htk(htk)
+    # -------------------------------------------------------------------------
     
-    # Display
+    name = "20250317_rep2_cell07_000min_N00_Dr01_2OBJ_none_.nd2"
+    path = list(data_path.rglob(f"*{name}"))[0]
+    voxsize = 0.2
+    
+    # -------------------------------------------------------------------------
+    
+    t0 = time.time()
+    print("open : ", end="", flush=False)
+    
+    shape = check_nd2(path)
+    if shape[1] == 4:
+        _, C1 = import_nd2(path, z=13, c=0, voxsize=voxsize)
+        _, C4 = import_nd2(path, z=13, c=3, voxsize=voxsize)
+        prp = prepare_data(C1, C4)
+        
+    t1 = time.time()
+    print(f"{t1 - t0:.3f}s")
+    
+    # -------------------------------------------------------------------------
+    
     import napari
     viewer = napari.Viewer()
     viewer.add_image(prp)

@@ -5,48 +5,70 @@ np.random.seed(42)
 from pathlib import Path
 
 # functions
-from functions import import_htk, prepare_htk, save_tif 
+from functions import check_nd2, import_nd2, prepare_data, save_tif 
 
 #%% Inputs --------------------------------------------------------------------
 
 voxsize = 0.2
-nSlices = 5
-tags_out = ["Cla__"]
+nSlices = 3
 
 #%% Initialize ----------------------------------------------------------------
 
-# data_path = Path("D:\local_Suzuki\data")
+# Paths 
 data_path = Path(r"\\scopem-idadata.ethz.ch\BDehapiot\remote_Suzuki\data")
 train_path = Path("data", "train")
-htk_paths = list(data_path.rglob("*.nd2"))   
 
 #%% Function(s) ---------------------------------------------------------------
 
-def extract(paths, voxsize=0.2, nSlices=5):
+def extract(data_path, train_path, voxsize=0.2, nSlices=5):
+    
+    # Nested function(s) ------------------------------------------------------
+    
+    def _extract(nd2_path, z_idx, voxsize=0.2):
+        
+        # Extract & prepare images
+        _, C1 = import_nd2(nd2_path, z=z_idx, c=0, voxsize=voxsize)
+        _, C4 = import_nd2(nd2_path, z=z_idx, c=3, voxsize=voxsize)
+        prp = prepare_data(C1, C4)
+        
+        # Save
+        suffix = f"{voxsize}_z{z_idx:02d}"
+        save_name = nd2_path.stem + "_" + suffix + ".tif"
+        print(save_name)
+        save_path = train_path / save_name
+        save_tif(prp, save_path, voxsize=voxsize)
+        
+    # Execute -----------------------------------------------------------------
 
-    for i, path in enumerate(paths):
-                
-        if any(tag not in path.stem for tag in tags_out):
+    # Paths
+    nd2_paths = list(data_path.rglob("*.nd2"))   
+
+    # Extract & prepare images
+    for nd2_path in nd2_paths:
+
+        # Check nd2 file
+        shape = check_nd2(nd2_path)
+        if shape[1] != 4:
+            continue
         
-            print("\n" + "load : " + path.name)    
+        # Random z_idx
+        z_idxs = np.random.choice(
+            np.arange(shape[0]), size=nSlices, replace=False)  
         
-            # Import and prepare htk
-            _, htk = import_htk(path, voxsize=voxsize)
-            if htk.shape[1] != 4:
-                continue
-            prp = prepare_htk(htk)
-            
-            # Save random slices
-            idxs = np.random.choice(
-                np.arange(prp.shape[0]), size=nSlices, replace=False)   
-            for idx in idxs:
-                suffix = f"{voxsize}_z{idx:02d}"
-                save_name = path.stem + "_" + suffix + ".tif"
-                save_path = train_path / save_name
-                print(suffix, end=", ", flush=False)
-                save_tif(prp[idx, ...], save_path, voxsize=voxsize)
+        for z_idx in z_idxs:
+            _extract(nd2_path, z_idx, voxsize=voxsize)
         
 #%% Execute -------------------------------------------------------------------
 
 if __name__ == "__main__":
-    extract(htk_paths, voxsize=voxsize, nSlices=nSlices)
+    extract(data_path, train_path, voxsize=voxsize, nSlices=nSlices)
+
+#%%
+
+    # # Extract images for already existing masks
+    # msk_paths = list(train_path.glob("*_mask.tif"))
+    # for msk_path in msk_paths:
+    #     name = msk_path.stem[:-13] + ".nd2"
+    #     z_idx = int(msk_path.stem[-7:-5])
+    #     nd2_path = list(data_path.rglob(f"*{name}"))[0]
+    #     _extract(nd2_path, -(z_idx // 2), voxsize=voxsize)    

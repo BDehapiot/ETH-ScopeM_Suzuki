@@ -5,8 +5,8 @@ import numpy as np
 from skimage import io
 from pathlib import Path
 
-# functions
-from functions import import_htk, prepare_htk
+# # functions
+# from functions import import_htk, prepare_htk
 
 # bdtools
 from bdtools.norm import norm_pct
@@ -23,11 +23,11 @@ predict = 0
 # UNet build()
 backbone = "resnet18"
 activation = "sigmoid"
-downscale_factor = 3
+downscale_factor = 2
 
 # UNet train()
 preview = 0
-load_name = "model_512_normal_2000-720_3"
+load_name = ""
 
 # preprocess
 patch_size = 512
