@@ -1,12 +1,8 @@
 #%% Imports -------------------------------------------------------------------
 
-import napari
 import numpy as np
 from skimage import io
 from pathlib import Path
-
-# # functions
-# from functions import import_htk, prepare_htk
 
 # bdtools
 from bdtools.norm import norm_pct
@@ -23,20 +19,20 @@ predict = 0
 # UNet build()
 backbone = "resnet18"
 activation = "sigmoid"
-downscale_factor = 2
+downscale_factor = 1
 
 # UNet train()
 preview = 0
-load_name = ""
+load_name = "model_512_normal_3000-1179_1"
 
 # preprocess
 patch_size = 512
-patch_overlap = 0
+patch_overlap = 256
 img_norm = "none"
 msk_type = "normal"
 
 # augment
-iterations = 2000
+iterations = 3000
 gamma_p = 0.5
 gblur_p = 0
 noise_p = 0.5 
@@ -48,11 +44,8 @@ epochs = 100
 batch_size = 8
 validation_split = 0.2
 metric = "soft_dice_coef"
-learning_rate = 0.0005
+learning_rate = 0.0001
 patience = 20
-
-# predict
-rf = 0.5
 
 #%% Initialize ----------------------------------------------------------------
 
@@ -62,7 +55,7 @@ train_path = Path("data", "train")
 
 #%% Function(s) ---------------------------------------------------------------
 
-def prepare_data(imgs, msks):
+def format_data(imgs, msks):
     nYs = [img.shape[0] for img in imgs]
     nXs = [img.shape[1] for img in imgs]
     nY_max = np.max(nYs)
@@ -101,8 +94,8 @@ if __name__ == "__main__":
                     msks.append(io.imread(path))   
                     imgs.append(io.imread(str(path).replace("_mask", "")))
 
-        # Prepare data
-        imgs, msks = prepare_data(imgs, msks)
+        # Format data
+        imgs, msks = format_data(imgs, msks)
 
         unet = UNet(
             save_name="",

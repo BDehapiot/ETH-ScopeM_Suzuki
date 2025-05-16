@@ -198,9 +198,14 @@ def import_nd2(path, z="all", c="all", voxsize=0.2):
 #     mrg *= max0 / max1 
 #     return mrg.astype("uint8")
 
+# def prepare_data(C1, C4):
+#     mrg = np.maximum(C1, C4)
+#     return mrg
+
 def prepare_data(C1, C4):
-    mrg = np.maximum(C1, C4)
-    return mrg
+    prp = np.maximum(C1, C4)
+    prp = adjust_gamma(prp, gamma=0.33)
+    return prp
 
 #%% Function : save_tif() -----------------------------------------------------
     
@@ -281,7 +286,7 @@ if __name__ == "__main__":
         _, C1 = import_nd2(path, z=13, c=0, voxsize=voxsize)
         _, C4 = import_nd2(path, z=13, c=3, voxsize=voxsize)
         prp = prepare_data(C1, C4)
-        
+                
     t1 = time.time()
     print(f"{t1 - t0:.3f}s")
     
