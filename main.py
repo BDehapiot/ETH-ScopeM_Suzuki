@@ -4,13 +4,15 @@ import time
 import pickle
 import shutil
 import napari
+import warnings
 import numpy as np
 import pandas as pd
 from pathlib import Path
 from joblib import Parallel, delayed
 
 # functions
-from functions import import_htk, prepare_htk, save_tif, load_data  
+# from functions import import_htk, prepare_htk,  
+from functions import check_nd2, import_nd2, prepare_data, save_tif, load_data 
 
 # bdtools
 # from bdtools.mask import get_edt
@@ -44,6 +46,8 @@ import matplotlib.pyplot as plt
 
 #%% Inputs --------------------------------------------------------------------
 
+warnings.filterwarnings("ignore")
+
 procedure = {
     "extract" : 0,
     "predict" : 0,
@@ -56,13 +60,13 @@ parameters = {
     
     # Paths
     "data_path"   : Path("D:\local_Suzuki\data"),
-    "model_name"  : "model_512_normal_2000-160_3",
+    "model_name"  : "model_512_normal_3000-1179_1",
     "tags"        : ["2OBJ"],
     
     # Parameters
     "voxsize"     : 0.2,
     "cyt_thresh"  : 0.05, # 0.05
-    "ncl_thresh"  : 0.15, # 0.15
+    "ncl_thresh"  : 0.25, # 0.15
     "blb_threshs" : {
         "2obj"    : [0.75, 0.33, 0.25], # C1, C2, C3
         "3obj"    : [0.75, 0.33, 0.25], # C1, C2, C3
@@ -143,7 +147,14 @@ class Main:
                 out_path.mkdir(parents=True, exist_ok=True)
                     
             # Import
-            metadata, htk = import_htk(
+            shape = check_nd2(path)
+            if shape[1] != 4:
+                return
+            
+            t0 = time.time()
+            print(f"{path.name} : ", end="", flush=False)
+            
+            metadata, htk = import_nd2(
                 path, voxsize=self.parameters["voxsize"]) 
             
             # Save
@@ -156,38 +167,32 @@ class Main:
             metadata_df.to_csv(out_path / "metadata.csv", index=False)
             
             for c in range(htk.shape[1]):
-                stk = htk[:, c, ...]
-                stk = (stk // 16).astype("uint8") 
                 save_tif(
-                    stk, out_path / f"C{c + 1}.tif", 
+                    htk[:, c, ...], out_path / f"C{c + 1}.tif", 
                     voxsize=metadata["vsize1"][0],
                     )
                 
-        # ---------------------------------------------------------------------
+            t1 = time.time()
+            print(f"{t1 - t0:.3f}s")
+                
+        # Serial --------------------------------------------------------------
+
+        print("extract() : ")
         
-        t0 = time.time()
-        print("extract() : ", end="", flush=False)
-        
-        Parallel(n_jobs=-1)(
-            delayed(_extract)(path) 
-            for path in self.htk_paths
-            ) 
-        
-        t1 = time.time()
-        print(f"{t1 - t0:.3f}s")
+        for path in self.htk_paths:
+            _extract(path)
         
 #%% Class(Main) : predict() ---------------------------------------------------
     
     def predict(self):
         
-        t0 = time.time()
-        print("predict() : ", end="", flush=False)
+        print("predict() : ")
         
         # Initialize model
         unet = UNet(load_name=self.parameters["model_name"])
         
         for path in self.htk_paths:
-                        
+
             # Load data
             out_path = path.parent / path.stem
             prd_path = out_path / "prd.tif"
@@ -197,10 +202,17 @@ class Main:
             
             else:
                 
+                t0 = time.time()
+                print(f"{path.name} : ", end="", flush=False)
+                
                 data = load_data(out_path)
                 
                 # Prepare
-                prp = prepare_htk(data["htk"])
+                prp = prepare_data(
+                    data["htk"][:, 0, ...],
+                    data["htk"][:, 3, ...],
+                    )
+                prp = norm_pct(prp)
                 
                 # Predict
                 prd = unet.predict(prp, verbose=0)
@@ -212,8 +224,8 @@ class Main:
                     voxsize=data["metadata"]["vsize1"][0],
                     )         
             
-        t1 = time.time()
-        print(f"{t1 - t0:.3f}s")
+                t1 = time.time()
+                print(f"{t1 - t0:.3f}s")
         
 #%% Class(Main) : process() ---------------------------------------------------
 
@@ -542,6 +554,7 @@ class Display:
                 self.viewer.layers[name].visible = 1
             else:
                 self.viewer.layers[name].visible = 0
+        self.center_view()
     
     def show_predictions(self):
         self.viewer.dims.ndisplay = 3
@@ -551,6 +564,7 @@ class Display:
                 self.viewer.layers[name].visible = 1
             else:
                 self.viewer.layers[name].visible = 0
+        self.center_view()
                 
     def show_chk(self, tag="C1"):
         self.viewer.dims.ndisplay = 2
@@ -560,6 +574,7 @@ class Display:
                 self.viewer.layers[name].visible = 1
             else:
                 self.viewer.layers[name].visible = 0
+        self.center_view()
                 
 #%% Class(Display) : init_layers() --------------------------------------------            
 

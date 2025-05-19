@@ -189,19 +189,6 @@ def import_nd2(path, z="all", c="all", voxsize=0.2):
 
 #%% Function : prepare_htk() --------------------------------------------------
 
-# def prepare_htk(htk):
-#     C1, C4 = htk[:, 0, ...], htk[:, 3, ...]
-#     mrg = (C1 + C4) / 2
-#     max0 = np.max(mrg)
-#     mrg = adjust_gamma(mrg, gamma=0.5)
-#     max1 = np.max(mrg)
-#     mrg *= max0 / max1 
-#     return mrg.astype("uint8")
-
-# def prepare_data(C1, C4):
-#     mrg = np.maximum(C1, C4)
-#     return mrg
-
 def prepare_data(C1, C4):
     prp = np.maximum(C1, C4)
     prp = adjust_gamma(prp, gamma=0.33)

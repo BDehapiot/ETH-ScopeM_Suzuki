@@ -11,16 +11,20 @@ from functions import check_nd2, import_nd2, prepare_data, save_tif
 
 voxsize = 0.2
 nSlices = 3
+ncl = 1
 
 #%% Initialize ----------------------------------------------------------------
 
 # Paths 
 data_path = Path(r"\\scopem-idadata.ethz.ch\BDehapiot\remote_Suzuki\data")
-train_path = Path("data", "train")
+if ncl:
+    train_path = Path("data", "train_ncl")
+else:
+    train_path = Path("data", "train")
 
 #%% Function(s) ---------------------------------------------------------------
 
-def extract(data_path, train_path, voxsize=0.2, nSlices=5):
+def extract(data_path, train_path, voxsize=0.2, nSlices=3, ncl=False):
     
     # Nested function(s) ------------------------------------------------------
     
@@ -37,6 +41,18 @@ def extract(data_path, train_path, voxsize=0.2, nSlices=5):
         print(save_name)
         save_path = train_path / save_name
         save_tif(prp, save_path, voxsize=voxsize)
+        
+    def _extract_ncl(nd2_path, z_idx, voxsize=0.2):
+        
+        # Extract & prepare images
+        _, C4 = import_nd2(nd2_path, z=z_idx, c=3, voxsize=voxsize)
+        
+        # Save
+        suffix = f"{voxsize}_z{z_idx:02d}_ncl"
+        save_name = nd2_path.stem + "_" + suffix + ".tif"
+        print(save_name)
+        save_path = train_path / save_name
+        save_tif(C4, save_path, voxsize=voxsize)
         
     # Execute -----------------------------------------------------------------
 
@@ -56,19 +72,24 @@ def extract(data_path, train_path, voxsize=0.2, nSlices=5):
             np.arange(shape[0]), size=nSlices, replace=False)  
         
         for z_idx in z_idxs:
-            _extract(nd2_path, z_idx, voxsize=voxsize)
+            if ncl:
+                _extract_ncl(nd2_path, z_idx, voxsize=voxsize)
+            else:    
+                _extract(nd2_path, z_idx, voxsize=voxsize)
         
 #%% Execute -------------------------------------------------------------------
 
 if __name__ == "__main__":
-    extract(data_path, train_path, voxsize=voxsize, nSlices=nSlices)
+    if ncl :
+        extract(
+            data_path, train_path, 
+            voxsize=voxsize, nSlices=nSlices, 
+            ncl=True
+            )
+    else:   
+        extract(
+            data_path, train_path, 
+            voxsize=voxsize, nSlices=nSlices, 
+            ncl=False
+            )
 
-#%%
-
-    # # Extract images for already existing masks
-    # msk_paths = list(train_path.glob("*_mask.tif"))
-    # for msk_path in msk_paths:
-    #     name = msk_path.stem[:-13] + ".nd2"
-    #     z_idx = int(msk_path.stem[-7:-5])
-    #     nd2_path = list(data_path.rglob(f"*{name}"))[0]
-    #     _extract(nd2_path, -(z_idx // 2), voxsize=voxsize)    
