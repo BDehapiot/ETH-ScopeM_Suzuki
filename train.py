@@ -17,8 +17,8 @@ from functions import check_nd2, import_nd2, prepare_data
 #%% Inputs --------------------------------------------------------------------
 
 # Procedure
-annotate = 1
-train = 0
+annotate = 0
+train = 1
 predict = 0
 
 # Annotate
@@ -31,7 +31,7 @@ downscale_factor = 1
 
 # UNet train()
 preview = 0
-load_name = "model_512_normal_3000-1683_1"
+load_name = ""
 
 # preprocess
 patch_size = 512

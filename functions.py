@@ -225,9 +225,10 @@ def load_data(out_path):
     data["htk"] = htk
     
     # Load prd
-    prd_path = out_path / "prd.tif"
-    if prd_path.exists():
-        data["prd"] = io.imread(out_path / "prd.tif")
+    cyt_prd_path = out_path / "cyt_prd.tif"
+    if cyt_prd_path.exists():
+        data["cyt_prd"] = io.imread(out_path / "cyt_prd.tif")
+        data["ncl_prd"] = io.imread(out_path / "ncl_prd.tif")
        
     # Load msk
     msk_path = out_path / "cyt_msk.tif"
