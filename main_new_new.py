@@ -15,7 +15,7 @@ from joblib import Parallel, delayed
 from functions import check_nd2, import_nd2, prepare_data, save_tif, load_data 
 
 # bdtools
-# from bdtools.mask import get_edt
+from bdtools.mask import get_edt
 from bdtools.norm import norm_pct
 from bdtools.models.unet import UNet
 
@@ -50,7 +50,7 @@ warnings.filterwarnings("ignore")
 
 procedure = {
     
-    "extract" : 0,
+    "extract" : 1,
     "predict" : 0,
     "process" : 0,
     "analyse" : 0,
@@ -62,7 +62,8 @@ parameters = {
     
     # Paths
     
-    "data_path"      : Path("D:\local_Suzuki\data"),
+    # "data_path"      : Path("D:\local_Suzuki\data"),
+    "data_path"      : Path(r"\\scopem-idadata.ethz.ch\BDehapiot\remote_Suzuki\data"),
     "model_name_cyt" : "model_512_normal_3000-1179_1_cyt",
     "model_name_ncl" : "model_512_normal_3000-783_1_ncl",
     "tags"           : ["2OBJ"],
@@ -99,13 +100,7 @@ class Main:
         # Fetch
         self.procedure  = procedure
         self.parameters = parameters
-        
-        # Initialize
-        if "2OBJ" in self.parameters["tags"]:
-            self.exp = "2obj"
-        if "3OBJ" in self.parameters["tags"]:
-            self.exp = "3obj"
-        
+                
         # Run
         self.initialize()
         if self.procedure["extract"]:
@@ -368,14 +363,17 @@ class Main:
 
     def analyse(self): 
         
-        def get_blobs_int(lbl, img):
-            lbl_f = lbl.ravel()
-            img_f = img.ravel()        
-            counts = np.bincount(lbl_f)
-            sum_img = np.bincount(lbl_f, weights=img_f)
+        def get_blobs_int(lbl, img, return_idx=False):
+            lbl_r = lbl.ravel()
+            img_r = img.ravel()        
+            counts = np.bincount(lbl_r)
+            sum_img = np.bincount(lbl_r, weights=img_r)
             idx = np.nonzero(counts)[0]
             idx = idx[idx != 0]  
-            return (idx, sum_img[idx] / counts[idx])
+            if return_idx:
+                return (idx, sum_img[idx] / counts[idx])
+            else:
+                return sum_img[idx] / counts[idx]
         
         def _analyse(path):
             
@@ -383,19 +381,55 @@ class Main:
             out_path = path.parent / path.stem
             data = load_data(out_path)
             
-            # Filter blobs
-            vals = get_blobs_int(data["C2_lbl"], data["C3_lbl"] > 0)
-            lbls = vals[0][vals[1] == 0]
-            mask = np.isin(data["C2_lbl"], lbls)
-            C2_lbl_f = data["C2_lbl"].copy()
-            C2_lbl_f[mask == 0] = 0
+            # Initialize
+            C2_lbl = data["C2_lbl"]
+            metadata = data["metadata"]
+            lbls = np.arange(1, np.max(C2_lbl) + 1)
+            cyt_edt = get_edt(data["cyt_msk"], rescale_factor=0.5)
+            
+            metadata = data["metadata"]
+            
+            # Append results
+            C2_results = {
+                "lbl"         : lbls,
+                "path"        : metadata["path"],
+                "date"        : metadata["date"],
+                "rep"         : metadata["rep"],
+                "cell"        : metadata["cell"],
+                "time"        : metadata["time"],
+                "C1_name"     : metadata["chn_names"][0],
+                "C2_name"     : metadata["chn_names"][1],
+                "C3_name"     : metadata["chn_names"][2],
+                "C4_name"     : metadata["chn_names"][3],
+                "cond"        : metadata["cond"],
+                "exp"         : metadata["exp"],
+                "count"       : [(C2_lbl == l).sum() for l in lbls],
+                "cyt_edt_avg" : get_blobs_int(C2_lbl, cyt_edt),
+                "ncl_msk_avg" : get_blobs_int(C2_lbl, data["ncl_msk"] > 0),
+                "C1_avg"      : get_blobs_int(C2_lbl, data["htk"][:, 0, ...]),
+                "C2_avg"      : get_blobs_int(C2_lbl, data["htk"][:, 1, ...]),
+                "C3_avg"      : get_blobs_int(C2_lbl, data["htk"][:, 2, ...]),
+                "C1_msk_avg"  : get_blobs_int(C2_lbl, data["C1_lbl"] > 0),
+                "C3_msk_avg"  : get_blobs_int(C2_lbl, data["C3_lbl"] > 0),
+                }
+            
+            # Get valid labels 
+            lbls_v = lbls[C2_results["C3_msk_avg"] == 0]
+            C2_lbl_v = C2_lbl.copy()
+            C2_lbl_v[np.isin(C2_lbl, lbls_v) == 0] = 0
             
             # Save
+            
+            C2_results = pd.DataFrame(C2_results)   
+            C2_results_v = C2_results[C2_results["C3_msk_avg"] == 0]
+            C2_results.to_csv(out_path / "C2_results.csv", index=False)
+            C2_results_v.to_csv(out_path / "C2_results_v.csv", index=False)
+            
             save_tif(
-                C2_lbl_f.astype("uint16"), 
-                out_path / "C2_lbl_f.tif", 
+                C2_lbl_v.astype("uint16"), 
+                out_path / "C2_lbl_v.tif", 
                 voxsize=data["metadata"]["vsize1"][0],
-                )   
+                )  
                     
         # ---------------------------------------------------------------------
         
@@ -406,9 +440,29 @@ class Main:
             delayed(_analyse)(path) 
             for path in self.htk_paths
             ) 
-        
+                
         t1 = time.time()
         print(f"{t1 - t0:.3f}s")
+        
+        # Merge & save C2_results
+        
+        C2_results_m = []
+        for path in list(parameters["data_path"].rglob("*C2_results.csv")):
+            C2_results_m.append(pd.read_csv(path))
+        C2_results_m = pd.concat(C2_results_m, ignore_index=True)
+        C2_results_m.to_csv(
+            parameters["data_path"] / self.exp / "C2_results_m.csv", 
+            index=False,
+            )
+        
+        C2_results_v_m = []
+        for path in list(parameters["data_path"].rglob("*C2_results_v.csv")):
+            C2_results_v_m.append(pd.read_csv(path))
+        C2_results_v_m = pd.concat(C2_results_v_m, ignore_index=True)
+        C2_results_v_m.to_csv(
+            parameters["data_path"] / self.exp / "C2_results_v_m.csv", 
+            index=False,
+            )
 
 #%% Class(Display) ------------------------------------------------------------
     
@@ -600,7 +654,7 @@ class Display:
         self.viewer.dims.ndisplay = 3
         for name in self.viewer.layers:
             name = str(name)
-            if name in ["cyt_msk", "ncl_msk", "C1_msk", "C2_msk_f"]:
+            if name in ["cyt_msk", "ncl_msk", "C1_msk", "C2_msk_v"]:
                 self.viewer.layers[name].visible = 1
             else:
                 self.viewer.layers[name].visible = 0
@@ -654,8 +708,8 @@ class Display:
             if c == 1:
                 
                 self.viewer.add_image(
-                    self.data[0]["C2_lbl_f"] > 0, visible=0,
-                    name="C2_msk_f", colormap=self.cmaps[c],
+                    self.data[0]["C2_lbl_v"] > 0, visible=0,
+                    name="C2_msk_v", colormap=self.cmaps[c],
                     blending="additive", opacity=0.75, 
                     rendering="attenuated_mip", attenuation=0.5,  
                     )
@@ -733,7 +787,7 @@ class Display:
             
             if c == 1:
             
-                self.viewer.layers["C2_msk_f"].data = (
+                self.viewer.layers["C2_msk_v"].data = (
                     self.data[self.idx]["C2_lbl"] > 0)                
             
             if c < 3: 
@@ -814,129 +868,3 @@ if __name__ == "__main__":
     
     main = Main()
     display = Display()
-    
-#%%
-
-    def get_blobs_int(lbl, img, return_idx=False):
-        lbl_r = lbl.ravel()
-        img_r = img.ravel()        
-        counts = np.bincount(lbl_r)
-        sum_img = np.bincount(lbl_r, weights=img_r)
-        idx = np.nonzero(counts)[0]
-        idx = idx[idx != 0]  
-        if return_idx:
-            return (idx, sum_img[idx] / counts[idx])
-        else:
-            return sum_img[idx] / counts[idx]
-    
-    def _analyse(path):
-        
-        # Load data
-        out_path = path.parent / path.stem
-        data = load_data(out_path)
-
-        # Initialize
-        C2_lbl = data["C2_lbl"]
-        cyt_edt = get_edt(data["cyt_msk"], rescale_factor=0.5)
-        
-        # C2_lbl measurments
-        results = {
-            "lbl"         : np.arange(1, np.max(C2_lbl) + 1),
-            "cyt_edt_avg" : get_blobs_int(C2_lbl, cyt_edt),
-            "ncl_msk_avg" : get_blobs_int(C2_lbl, data["ncl_msk"] > 0),
-            "C1_avg"      : get_blobs_int(C2_lbl, data["htk"][:, 0, ...]),
-            "C2_avg"      : get_blobs_int(C2_lbl, data["htk"][:, 1, ...]),
-            "C3_avg"      : get_blobs_int(C2_lbl, data["htk"][:, 2, ...]),
-            "C1_msk_avg"  : get_blobs_int(C2_lbl, data["C1_lbl"] > 0),
-            "C3_msk_avg"  : get_blobs_int(C2_lbl, data["C3_lbl"] > 0),
-            }
-
-        
-        # Save
-        save_tif(
-            C2_lbl_f.astype("uint16"), 
-            out_path / "C2_lbl_f.tif", 
-            voxsize=data["metadata"]["vsize1"][0],
-            )  
-
-#%%
-
-    from bdtools.mask import get_edt
-
-    # Parameters
-    idx = 0
-
-    # -------------------------------------------------------------------------
-
-    # Initialize
-    paths = list(parameters["data_path"].rglob("*.nd2"))
-    if "2OBJ" in parameters["tags"]: exp = "2obj"
-    if "3OBJ" in parameters["tags"]: exp = "3obj"
-    htk_paths = []
-    for path in paths:
-        if any(tag in path.stem for tag in parameters["tags"]):
-            htk_paths.append(path)
-       
-    # Load
-    out_path = parameters["data_path"] / exp / htk_paths[idx].stem
-    data = load_data(out_path)
-    
-    # -------------------------------------------------------------------------
-        
-    t0 = time.time()
-    print("run : ", end="", flush="")
-    
-    # Initialize
-    C2_lbl = data["C2_lbl"]
-    cyt_edt = get_edt(data["cyt_msk"], rescale_factor=0.5)
-        
-    # C2 data
-    lbl         = np.arange(1, np.max(C2_lbl) + 1)
-    count       = [(C2_lbl == l).sum() for l in lbl]
-    cyt_edt_avg = get_blobs_int(C2_lbl, cyt_edt)
-    ncl_msk_avg = get_blobs_int(C2_lbl, data["ncl_msk"] > 0)
-    C1_avg      = get_blobs_int(C2_lbl, data["htk"][:, 0, ...])
-    C2_avg      = get_blobs_int(C2_lbl, data["htk"][:, 1, ...])
-    C3_avg      = get_blobs_int(C2_lbl, data["htk"][:, 2, ...])
-    C1_msk_avg  = get_blobs_int(C2_lbl, data["C1_lbl"] > 0)
-    C3_msk_avg  = get_blobs_int(C2_lbl, data["C3_lbl"] > 0)   
-    
-    # # Append results
-    # C2_results = {
-    #     "lbl"         : np.arange(1, np.max(C2_lbl) + 1),
-    #     "cyt_edt_avg" : get_blobs_int(C2_lbl, cyt_edt),
-    #     "ncl_msk_avg" : get_blobs_int(C2_lbl, data["ncl_msk"] > 0),
-    #     "C1_avg"      : get_blobs_int(C2_lbl, data["htk"][:, 0, ...]),
-    #     "C2_avg"      : get_blobs_int(C2_lbl, data["htk"][:, 1, ...]),
-    #     "C3_avg"      : get_blobs_int(C2_lbl, data["htk"][:, 2, ...]),
-    #     "C1_msk_avg"  : get_blobs_int(C2_lbl, data["C1_lbl"] > 0),
-    #     "C3_msk_avg"  : get_blobs_int(C2_lbl, data["C3_lbl"] > 0),
-    #     }
-    
-    # valid_lbls = results["lbl"][results["C3_msk_avg"] == 0]
-    # C2_lbl_f = C2_lbl.copy()
-    # C2_lbl_f[np.isin(C2_lbl, valid_lbls) == 0] = 0
-    
-    # results = pd.DataFrame(results)   
-    # results_f = results[results["C3_msk_avg"] == 0]
-    
-    # valid_lbls = results_f["lbl"]
-    # C2_lbl_f = C2_lbl.copy()
-    # C2_lbl_f[np.isin(C2_lbl, valid_lbls) == 0] = 0
-
-    
-    # results.to_csv(out_path / "results.csv", index=False)
-    # results_f.to_csv(out_path / "results_f.csv", index=False)
-    
-    # viewer = napari.Viewer()
-    # viewer.add_image(C2_lbl > 0)
-    # viewer.add_image(C2_lbl_f > 0)
-    
-    t1 = time.time()
-    print(f"{t1 - t0:.3f}s")
-    
-    # -------------------------------------------------------------------------
-    
-    # plt.scatter(results["cyt_edt_avg"], results["C1_avg"])
-    
-    

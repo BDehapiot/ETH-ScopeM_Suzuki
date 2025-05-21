@@ -8,9 +8,6 @@ import numpy as np
 from skimage import io
 from pathlib import Path
 
-# bdtools
-from bdtools.norm import norm_pct
-
 # skimage
 from skimage.transform import rescale
 from skimage.exposure import adjust_gamma
@@ -20,23 +17,28 @@ from skimage.exposure import adjust_gamma
 mapping = {
 
     # NRP2
-    "E00"  : "eGFP",
-    "N00"  : "NRP2-eGFP",
-    "N01"  : "NRP2-eGFP_T319R",
-    "N02"  : "NRP2-eGFP_AAA",
-    "N03"  : "NRP2-eGFP_dA1A2",
-    "N04"  : "NRP2-eGFP_dB1",
-    "N05"  : "NRP2-eGFP_dB2",
-    "N06"  : "NRP2-eGFP_dMAM",
-    "N07"  : "NRP2-eGFP_dCyto",
-    "N08"  : "NRP2-eGFP_noSA",
+    "E00"  : "NRP2KO-eGFP",
+    "N00"  : "NRP2KO-NRP2-eGFP",
+    "N01"  : "NRP2KO-NRP2-eGFP_T319R",
+    "N02"  : "NRP2KO-NRP2-eGFP_AAA",
+    "N03"  : "NRP2KO-NRP2-eGFP_dA1A2",
+    "N04"  : "NRP2KO-NRP2-eGFP_dB1",
+    "N05"  : "NRP2KO-NRP2-eGFP_dB2",
+    "N06"  : "NRP2KO-NRP2-eGFP_dMAM",
+    "N07"  : "NRP2KO-NRP2-eGFP_dCyto",
+    "N08"  : "NRP2KO-NRP2-eGFP_dSA",
+    "N09"  : "NRP2KO-NRP2-eGFP_dA1A2B1B2",
+    "N10"  : "NRP2KO-NRP2-eGFP_dB1B2",
+    "N11"  : "NRP2KO-NRP2-eGFP_dSAB1",
+    "N12"  : "NRP2KO-NRP2-eGFP_dSAB1B2",
     
     # Drugs
     "Im00" : "none",
     "IM00" : "none",
     "Dr01" : "DMSO",
-    "Dr02" : "Dyngo",
+    "Dr02" : "Dyngo4a",
     "Dr03" : "EIPA",
+    "Dr04" : "Pitstop2",
     "Dr05" : "CPZ",
     
     # Channels
@@ -46,58 +48,6 @@ mapping = {
         },
     
     }
-
-#%% Function : import_htk() ---------------------------------------------------
-
-# def import_htk(path, voxsize=0.2):
-    
-#     if "2OBJ" in path.name: exp = "2obj"
-#     if "3OBJ" in path.name: exp = "3obj"
-                
-#     with nd2.ND2File(path) as ndfile:
-        
-#         # vsize_in
-#         vsize0 = (
-#             ndfile.voxel_size()[2],
-#             ndfile.voxel_size()[1],
-#             ndfile.voxel_size()[0],
-#             )
-        
-#         # Load 
-#         htk = ndfile.asarray()
-        
-#     # Determine rescaling factors (rfi & rfc)
-#     rfi = vsize0[1] / vsize0[0]
-#     rfc = vsize0[0] / voxsize
-        
-#     # Load & rescale hstack
-#     shape0 = htk.shape
-#     htk = rescale(htk, (  1, 1, rfi, rfi), order=0) # iso
-#     htk = rescale(htk, (rfc, 1, rfc, rfc), order=0) # custom
-#     shape1 = htk.shape    
-    
-#     # Convert to "uint8" (from 0-4095 to 0-255)
-#     htk = (htk // 16).astype("uint8")
-    
-#     # Flip z axis
-#     htk = np.flip(htk, axis=0)
-    
-#     # Metadata
-#     cond = path.stem.split("_")[5]
-#     chn1 = path.stem.split("_")[4]
-#     chn_names = mapping["chn_names"][exp]
-#     chn_names[0] = mapping[chn1]
-#     metadata = {
-#         "path"      : path,
-#         "cond"      : mapping[cond],
-#         "chn_names" : chn_names,
-#         "shape0"    : shape0,
-#         "shape1"    : shape1,
-#         "vsize0"    : vsize0,
-#         "vsize1"    : (voxsize,) * 3,
-#         }
-                            
-#     return metadata, htk
 
 #%% Function : import_nd2() ---------------------------------------------------
 
@@ -171,14 +121,23 @@ def import_nd2(path, z="all", c="all", voxsize=0.2):
     #     arr = np.flip(arr, axis=0)
     
     # Metadata
-    cond = path.stem.split("_")[5]
+    date = path.stem.split("_")[0]
+    rep  = int(path.stem.split("_")[1][-1])
+    cell = int(path.stem.split("_")[2][-2:])
+    time = int(path.stem.split("_")[3][:3])
     chn1 = path.stem.split("_")[4]
+    cond = path.stem.split("_")[5]
     chn_names = mapping["chn_names"][exp]
     chn_names[0] = mapping[chn1]
     metadata = {
         "path"      : path,
-        "cond"      : mapping[cond],
+        "date"      : date,
+        "rep"       : rep,
+        "cell"      : cell,
+        "time"      : time,
         "chn_names" : chn_names,
+        "cond"      : mapping[cond],
+        "exp"       : exp,
         "shape0"    : shape0,
         "shape1"    : shape1,
         "vsize0"    : vsize0,
@@ -242,10 +201,10 @@ def load_data(out_path):
         for c in range(3):
             data[f"C{c + 1}_lbl"] = io.imread(out_path / f"C{c + 1}_lbl.tif")
     
-    # Load blb_f
-    blb_f_path = out_path / "C2_lbl_f.tif"
-    if blb_f_path.exists():
-        data["C2_lbl_f"] = io.imread(out_path / "C2_lbl_f.tif")
+    # Load blb_v
+    blb_v_path = out_path / "C2_lbl_v.tif"
+    if blb_v_path.exists():
+        data["C2_lbl_v"] = io.imread(out_path / "C2_lbl_v.tif")
         
     return data
 
@@ -271,12 +230,13 @@ if __name__ == "__main__":
     
     shape = check_nd2(path)
     if shape[1] == 4:
-        _, C1 = import_nd2(path, z=13, c=0, voxsize=voxsize)
-        _, C4 = import_nd2(path, z=13, c=3, voxsize=voxsize)
+        metadata, C1 = import_nd2(path, z=13, c=0, voxsize=voxsize)
+        metadata, C4 = import_nd2(path, z=13, c=3, voxsize=voxsize)
         prp = prepare_data(C1, C4)
                 
     t1 = time.time()
     print(f"{t1 - t0:.3f}s")
+    
     
     # -------------------------------------------------------------------------
     
