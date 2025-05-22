@@ -31,7 +31,7 @@ downscale_factor = 1
 
 # UNet train()
 preview = 0
-load_name = ""
+load_name = "model_512_normal_3000-1971_1"
 
 # preprocess
 patch_size = 512
@@ -52,7 +52,7 @@ epochs = 100
 batch_size = 8
 validation_split = 0.2
 metric = "soft_dice_coef"
-learning_rate = 0.0001
+learning_rate = 0.001
 patience = 20
 
 # predict
