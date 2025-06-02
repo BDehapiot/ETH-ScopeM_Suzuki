@@ -15,14 +15,14 @@ from joblib import Parallel, delayed
 from functions import check_nd2, import_nd2, prepare_data, save_tif, load_data 
 
 # bdtools
-# from bdtools.mask import get_edt
+from bdtools.mask import get_edt
 from bdtools.norm import norm_pct
 from bdtools.models.unet import UNet
 
 # skimage
-from skimage.filters import gaussian
-from skimage.segmentation import watershed
 from skimage.measure import label, regionprops
+from skimage.filters import gaussian, threshold_local
+from skimage.segmentation import watershed, relabel_sequential
 from skimage.morphology import (
     ball, h_maxima, binary_dilation, remove_small_objects, remove_small_holes)
 
@@ -32,9 +32,6 @@ from qtpy.QtWidgets import (
     QWidget, QPushButton, QRadioButton, QLabel,
     QGroupBox, QVBoxLayout, QHBoxLayout
     )
-
-# matplotlib
-import matplotlib.pyplot as plt 
 
 #%% Comments ------------------------------------------------------------------
 
@@ -49,34 +46,41 @@ import matplotlib.pyplot as plt
 warnings.filterwarnings("ignore")
 
 procedure = {
+    
     "extract" : 0,
     "predict" : 0,
-    "process" : 2,
-    "analyse" : 1,
-    "display" : 1,
+    "process" : 0,
+    "analyse" : 0,
+    "display" : 0,
+    
     }
 
 parameters = {
     
     # Paths
-    "data_path"   : Path("D:\local_Suzuki\data"),
-    "model_name"  : "model_512_normal_3000-1179_1",
-    "tags"        : ["2OBJ"],
+    
+    # "data_path"      : Path("D:\local_Suzuki\data"),
+    "data_path"      : Path(r"\\scopem-idadata.ethz.ch\BDehapiot\remote_Suzuki\data"),
+    "model_name_cyt" : "model_512_normal_3000-1179_1_cyt",
+    "model_name_ncl" : "model_512_normal_3000-783_1_ncl",
+    "tags"           : ["2OBJ"],
     
     # Parameters
-    "voxsize"     : 0.2,
-    "cyt_thresh"  : 0.05, # 0.05
-    "ncl_thresh"  : 0.25, # 0.15
-    "blb_threshs" : {
-        "2obj"    : [0.75, 0.33, 0.25], # C1, C2, C3
-        "3obj"    : [0.75, 0.33, 0.25], # C1, C2, C3
-        },
+    
+    "voxsize"        : 0.2,
+    "cyt_thresh"     : 0.05, # 0.05
+    "ncl_thresh"     : 0.15, # 0.15
+    "blb_tcoeffs"    : {
+        "2obj"       : [2, 2, 2], # C1, C2, C3
+        "3obj"       : [2, 2, 2], # C1, C2, C3
+                       },
     
     # Display
-    "cmaps"       : {
-        "2obj"    : ["bop orange", "magenta", "green", "blue"],
-        "3obj"    : ["bop orange", "magenta", "green", "blue"],
-        },
+    
+    "cmaps"          : {
+        "2obj"       : ["bop orange", "magenta", "green", "blue"],
+        "3obj"       : ["bop orange", "magenta", "green", "blue"],
+                       },
     
     } 
 
@@ -93,13 +97,7 @@ class Main:
         # Fetch
         self.procedure  = procedure
         self.parameters = parameters
-        
-        # Initialize
-        if "2OBJ" in self.parameters["tags"]:
-            self.exp = "2obj"
-        if "3OBJ" in self.parameters["tags"]:
-            self.exp = "3obj"
-        
+                
         # Run
         self.initialize()
         if self.procedure["extract"]:
@@ -134,8 +132,9 @@ class Main:
             
             # Setup directory
             out_path = path.parent / path.stem 
+            C1_path = out_path / "C1.tif"
             if out_path.exists():
-                if self.procedure["extract"] == 1:
+                if self.procedure["extract"] == 1 and C1_path.exists():
                     return
                 elif self.procedure["extract"] == 2:
                     for item in out_path.iterdir():
@@ -189,14 +188,15 @@ class Main:
         print("predict() : ")
         
         # Initialize model
-        unet = UNet(load_name=self.parameters["model_name"])
+        unet_cyt = UNet(load_name=self.parameters["model_name_cyt"])
+        unet_ncl = UNet(load_name=self.parameters["model_name_ncl"])
         
         for path in self.htk_paths:
 
             # Load data
             out_path = path.parent / path.stem
-            prd_path = out_path / "prd.tif"
-            if prd_path.exists() and self.procedure["predict"] == 1:
+            cyt_prd_path = out_path / "cyt_prd.tif"
+            if cyt_prd_path.exists() and self.procedure["predict"] == 1:
             
                 continue
             
@@ -208,21 +208,28 @@ class Main:
                 data = load_data(out_path)
                 
                 # Prepare
-                prp = prepare_data(
+                prp_cyt = prepare_data(
                     data["htk"][:, 0, ...],
                     data["htk"][:, 3, ...],
                     )
-                prp = norm_pct(prp)
+                prp_cyt = norm_pct(prp_cyt)
+                prp_ncl = norm_pct(data["htk"][:, 3, ...])
                 
                 # Predict
-                prd = unet.predict(prp, verbose=0)
+                cyt_prd = unet_cyt.predict(prp_cyt, verbose=0)
+                ncl_prd = unet_ncl.predict(prp_ncl, verbose=0)
                 
                 # Save
-                prd = (prd * 255).astype("uint8")
+                cyt_prd = (cyt_prd * 255).astype("uint8")
+                ncl_prd = (ncl_prd * 255).astype("uint8")
                 save_tif(
-                    prd, out_path / "prd.tif", 
+                    cyt_prd, out_path / "cyt_prd.tif", 
                     voxsize=data["metadata"]["vsize1"][0],
-                    )         
+                    )     
+                save_tif(
+                    ncl_prd, out_path / "ncl_prd.tif", 
+                    voxsize=data["metadata"]["vsize1"][0],
+                    )      
             
                 t1 = time.time()
                 print(f"{t1 - t0:.3f}s")
@@ -231,22 +238,23 @@ class Main:
 
     def process(self):
         
-        def get_masks(htk, prd):
+        def get_masks(htk, cyt_prd, ncl_prd):
             
             # Process
-            prd_prp = norm_pct(gaussian(prd, sigma=2))
+            cyt_prd_prp = norm_pct(gaussian(cyt_prd, sigma=1))
+            ncl_prd_prp = norm_pct(gaussian(ncl_prd, sigma=1))
             cyt_prp = norm_pct(gaussian(htk[:, 0, ...], sigma=1))
-            ncl_prp = norm_pct(gaussian(htk[:, 3, ...], sigma=2))
-            cyt_prp *= prd_prp
-            ncl_prp *= prd_prp
+            ncl_prp = norm_pct(gaussian(htk[:, 3, ...], sigma=1))
+            cyt_prp *= cyt_prd_prp
+            ncl_prp *= ncl_prd_prp
             cyt_msk = cyt_prp > self.parameters["cyt_thresh"]
             ncl_msk = ncl_prp > self.parameters["ncl_thresh"]
             cyt_msk = remove_small_objects(cyt_msk, min_size=1e4)
             ncl_msk = remove_small_objects(ncl_msk, min_size=1e4)
+            cyt_msk = remove_small_holes(cyt_msk, area_threshold=1e5)
+            ncl_msk = remove_small_holes(ncl_msk, area_threshold=1e5)
             
             # Posprocess ncl_msk
-            for z in range(ncl_msk.shape[0]):
-                ncl_msk[z, ...] = remove_small_holes(ncl_msk[z, ...])
             ncl_lbl = label(ncl_msk)
             for props in regionprops(ncl_lbl, intensity_image=cyt_msk):
                 lbl = props.label
@@ -262,23 +270,28 @@ class Main:
         
         def get_blobs(
                 arr, mask=None, 
-                sigma0=0.5, sigma1=5, thresh=0.5, 
+                sigma0=0.5, sigma1=5, thresh_coeff=2, 
                 out_prp=False
                 ):
             
             # preprocess
-            prp = gaussian(arr, sigma=sigma0)
-            prp -= gaussian(prp, sigma=sigma1)
-            prp = norm_pct(prp)
+            gbl0 = gaussian(arr, sigma=sigma0)
+            gbl1 = gaussian(arr, sigma=sigma1)   
+            prp = (gbl0 - gbl1) / gbl1
+            prp = norm_pct(prp, pct_low=0, pct_high=100)
+            local_thresh = threshold_local(prp, 21, offset=0)
+            msk = prp > local_thresh * 2
             if mask is not None:
-                prp[mask == 0] = 0
-            msk = prp > thresh
+                msk[mask == 0] = 0        
             
             # watershed
             hmax = h_maxima(prp, 0.1, footprint=ball(1))
             hmax = (hmax * 255).astype("uint8")
             hmax = label(hmax)
             lbl = watershed(-prp, markers=hmax, mask=msk)
+            
+            # relabel
+            lbl = relabel_sequential(lbl)[0]
             
             if out_prp:
                 return lbl, prp
@@ -300,15 +313,16 @@ class Main:
                 data = load_data(out_path)
                 
                 # Get masks
-                cyt_msk, ncl_msk = get_masks(data["htk"], data["prd"])
+                cyt_msk, ncl_msk = get_masks(
+                    data["htk"], data["cyt_prd"], data["ncl_prd"])
                 
                 for c in range(3):
                     
                     # Get blobs
                     blb_lbl = get_blobs(
                         data["htk"][:, c, ...], mask=cyt_msk, 
-                        sigma0=0.5, sigma1=5, 
-                        thresh=self.parameters["blb_threshs"][self.exp][c]
+                        sigma0=1, sigma1=5, 
+                        thresh_coeff=self.parameters["blb_tcoeffs"][self.exp][c]
                         )
                             
                     # Save
@@ -347,14 +361,17 @@ class Main:
 
     def analyse(self): 
         
-        def get_blobs_int(lbl, img):
-            lbl_f = lbl.ravel()
-            img_f = img.ravel()        
-            counts = np.bincount(lbl_f)
-            sum_img = np.bincount(lbl_f, weights=img_f)
+        def get_blobs_int(lbl, img, return_idx=False):
+            lbl_r = lbl.ravel()
+            img_r = img.ravel()        
+            counts = np.bincount(lbl_r)
+            sum_img = np.bincount(lbl_r, weights=img_r)
             idx = np.nonzero(counts)[0]
             idx = idx[idx != 0]  
-            return (idx, sum_img[idx] / counts[idx])
+            if return_idx:
+                return (idx, sum_img[idx] / counts[idx])
+            else:
+                return sum_img[idx] / counts[idx]
         
         def _analyse(path):
             
@@ -362,19 +379,55 @@ class Main:
             out_path = path.parent / path.stem
             data = load_data(out_path)
             
-            # Filter blobs
-            vals = get_blobs_int(data["C2_lbl"], data["C3_lbl"] > 0)
-            lbls = vals[0][vals[1] == 0]
-            mask = np.isin(data["C2_lbl"], lbls)
-            C2_lbl_f = data["C2_lbl"].copy()
-            C2_lbl_f[mask == 0] = 0
+            # Initialize
+            C2_lbl = data["C2_lbl"]
+            metadata = data["metadata"]
+            lbls = np.arange(1, np.max(C2_lbl) + 1)
+            cyt_edt = get_edt(data["cyt_msk"], rescale_factor=0.5)
+            
+            metadata = data["metadata"]
+            
+            # Append results
+            C2_results = {
+                "lbl"         : lbls,
+                "path"        : metadata["path"],
+                "date"        : metadata["date"],
+                "rep"         : metadata["rep"],
+                "cell"        : metadata["cell"],
+                "time"        : metadata["time"],
+                "C1_name"     : metadata["chn_names"][0],
+                "C2_name"     : metadata["chn_names"][1],
+                "C3_name"     : metadata["chn_names"][2],
+                "C4_name"     : metadata["chn_names"][3],
+                "cond"        : metadata["cond"],
+                "exp"         : metadata["exp"],
+                "count"       : [(C2_lbl == l).sum() for l in lbls],
+                "cyt_edt_avg" : get_blobs_int(C2_lbl, cyt_edt),
+                "ncl_msk_avg" : get_blobs_int(C2_lbl, data["ncl_msk"] > 0),
+                "C1_avg"      : get_blobs_int(C2_lbl, data["htk"][:, 0, ...]),
+                "C2_avg"      : get_blobs_int(C2_lbl, data["htk"][:, 1, ...]),
+                "C3_avg"      : get_blobs_int(C2_lbl, data["htk"][:, 2, ...]),
+                "C1_msk_avg"  : get_blobs_int(C2_lbl, data["C1_lbl"] > 0),
+                "C3_msk_avg"  : get_blobs_int(C2_lbl, data["C3_lbl"] > 0),
+                }
+            
+            # Get valid labels 
+            lbls_v = lbls[C2_results["C3_msk_avg"] == 0]
+            C2_lbl_v = C2_lbl.copy()
+            C2_lbl_v[np.isin(C2_lbl, lbls_v) == 0] = 0
             
             # Save
+            
+            C2_results = pd.DataFrame(C2_results)   
+            C2_results_v = C2_results[C2_results["C3_msk_avg"] == 0]
+            C2_results.to_csv(out_path / "C2_results.csv", index=False)
+            C2_results_v.to_csv(out_path / "C2_results_v.csv", index=False)
+            
             save_tif(
-                C2_lbl_f.astype("uint16"), 
-                out_path / "C2_lbl_f.tif", 
+                C2_lbl_v.astype("uint16"), 
+                out_path / "C2_lbl_v.tif", 
                 voxsize=data["metadata"]["vsize1"][0],
-                )   
+                )  
                     
         # ---------------------------------------------------------------------
         
@@ -385,9 +438,29 @@ class Main:
             delayed(_analyse)(path) 
             for path in self.htk_paths
             ) 
-        
+                
         t1 = time.time()
         print(f"{t1 - t0:.3f}s")
+        
+        # Merge & save C2_results
+        
+        C2_results_m = []
+        for path in list(parameters["data_path"].rglob("*C2_results.csv")):
+            C2_results_m.append(pd.read_csv(path))
+        C2_results_m = pd.concat(C2_results_m, ignore_index=True)
+        C2_results_m.to_csv(
+            parameters["data_path"] / self.exp / "C2_results_m.csv", 
+            index=False,
+            )
+        
+        C2_results_v_m = []
+        for path in list(parameters["data_path"].rglob("*C2_results_v.csv")):
+            C2_results_v_m.append(pd.read_csv(path))
+        C2_results_v_m = pd.concat(C2_results_v_m, ignore_index=True)
+        C2_results_v_m.to_csv(
+            parameters["data_path"] / self.exp / "C2_results_v_m.csv", 
+            index=False,
+            )
 
 #%% Class(Display) ------------------------------------------------------------
     
@@ -414,6 +487,7 @@ class Display:
         if self.procedure["display"]:
             self.init_data()
             self.init_viewer()
+            self.show_masks()
         
 #%% Class(Display) : init_data() ----------------------------------------------
         
@@ -469,15 +543,19 @@ class Display:
         self.dsp_group_box = QGroupBox("Display")
         dsp_group_layout = QHBoxLayout()
         self.rad_masks = QRadioButton("mask")
-        self.rad_predictions = QRadioButton("predictions")
+        self.rad_cyt_prd = QRadioButton("predict cyt")
+        self.rad_ncl_prd = QRadioButton("predict ncl")
         self.rad_masks.setChecked(True)
         dsp_group_layout.addWidget(self.rad_masks)
-        dsp_group_layout.addWidget(self.rad_predictions)
+        dsp_group_layout.addWidget(self.rad_cyt_prd)
+        dsp_group_layout.addWidget(self.rad_ncl_prd)
         self.dsp_group_box.setLayout(dsp_group_layout)
         self.rad_masks.toggled.connect(
             lambda checked: self.show_masks() if checked else None)
-        self.rad_predictions.toggled.connect(
-            lambda checked: self.show_predictions() if checked else None)
+        self.rad_cyt_prd.toggled.connect(
+            lambda checked: self.show_cyt_prd() if checked else None)
+        self.rad_ncl_prd.toggled.connect(
+            lambda checked: self.show_ncl_prd() if checked else None)
         
         # Create "check" menu
         self.chk_group_box = QGroupBox("Check blobs")
@@ -525,6 +603,12 @@ class Display:
         @self.viewer.bind_key("PageUp", overwrite=True)
         def next_image_key(viewer):
             self.next_hstack()
+            
+        @self.viewer.bind_key("Backspace", overwrite=True)
+        def toggle_outlines(viewer):
+            self.hide_outlines()
+            yield
+            self.show_outlines()
                                 
     def next_hstack(self):
         if self.idx < len(self.data) - 1:
@@ -546,21 +630,49 @@ class Display:
                 shape[0] // 2, shape[1] // 2, shape[2] // 2)
             self.viewer.camera.zoom = 1.0
             
+    def hide_outlines(self):
+        for name in self.viewer.layers:
+            name = str(name)
+            if self.rad_chk_C1b.isChecked(): tag = "C1"
+            if self.rad_chk_C2b.isChecked(): tag = "C2"
+            if self.rad_chk_C3b.isChecked(): tag = "C3"
+            if f"{tag}_out" in name:
+                self.viewer.layers[name].visible = 0
+                
+    def show_outlines(self):
+        for name in self.viewer.layers:
+            name = str(name)
+            if self.rad_chk_C1b.isChecked(): tag = "C1"
+            if self.rad_chk_C2b.isChecked(): tag = "C2"
+            if self.rad_chk_C3b.isChecked(): tag = "C3"
+            if f"{tag}_out" in name:
+                self.viewer.layers[name].visible = 1
+            
     def show_masks(self):
         self.viewer.dims.ndisplay = 3
         for name in self.viewer.layers:
             name = str(name)
-            if "msk" in name:
+            if name in ["cyt_msk", "ncl_msk", "C1_msk", "C2_msk_v"]:
                 self.viewer.layers[name].visible = 1
             else:
                 self.viewer.layers[name].visible = 0
         self.center_view()
     
-    def show_predictions(self):
+    def show_cyt_prd(self):
         self.viewer.dims.ndisplay = 3
         for name in self.viewer.layers:
             name = str(name)
-            if name in ["C1", "prd"]:
+            if name in ["C1", "cyt_prd"]:
+                self.viewer.layers[name].visible = 1
+            else:
+                self.viewer.layers[name].visible = 0
+        self.center_view()
+        
+    def show_ncl_prd(self):
+        self.viewer.dims.ndisplay = 3
+        for name in self.viewer.layers:
+            name = str(name)
+            if name in ["C4", "ncl_prd"]:
                 self.viewer.layers[name].visible = 1
             else:
                 self.viewer.layers[name].visible = 0
@@ -582,13 +694,20 @@ class Display:
         
         for c in range(self.data[0]["htk"].shape[1]- 1, -1, -1):
             
+            # htk
+            self.viewer.add_image(
+                self.data[0]["htk"][:, c, ...], visible=0,
+                name=f"C{c + 1}", colormap=self.cmaps[c], 
+                blending="additive", gamma=0.5, 
+                )
+            
             # blobs
             
             if c == 1:
                 
                 self.viewer.add_image(
-                    self.data[0]["C2_lbl_f"] > 0, visible=1,
-                    name="C2_msk_f", colormap=self.cmaps[c],
+                    self.data[0]["C2_lbl_v"] > 0, visible=0,
+                    name="C2_msk_v", colormap=self.cmaps[c],
                     blending="additive", opacity=0.75, 
                     rendering="attenuated_mip", attenuation=0.5,  
                     )
@@ -607,18 +726,11 @@ class Display:
                     name=f"C{c + 1}_out", colormap="gray",
                     blending="additive", opacity=0.5,  
                     ) 
-                
-            # htk
-            self.viewer.add_image(
-                self.data[0]["htk"][:, c, ...], visible=0,
-                name=f"C{c + 1}", colormap=self.cmaps[c], 
-                blending="additive", gamma=0.5, 
-                )
-                            
+
         # masks
         
         self.viewer.add_image(
-            self.data[0]["ncl_msk"], visible=1,
+            self.data[0]["ncl_msk"], visible=0,
             name="ncl_msk", colormap="blue",
             blending="translucent_no_depth", opacity=0.2,
             rendering="attenuated_mip", attenuation=0.5, 
@@ -631,7 +743,7 @@ class Display:
             )
         
         self.viewer.add_image(
-            self.data[0]["cyt_msk"], visible=1,
+            self.data[0]["cyt_msk"], visible=0,
             name="cyt_msk", colormap="gray",
             blending="translucent_no_depth", opacity=0.2,
             rendering="attenuated_mip", attenuation=0.5, 
@@ -643,11 +755,19 @@ class Display:
             blending="additive", opacity=0.2,  
             )
         
-        # prediction
+        # predictions
+        
         self.viewer.add_image(
-            self.data[0]["prd"], visible=0,
-            name="prd", colormap="turbo",
-            blending="translucent_no_depth", opacity=0.2,
+            self.data[0]["cyt_prd"], visible=0,
+            name="cyt_prd", colormap="turbo",
+            blending="translucent_no_depth", opacity=0.5,
+            rendering="attenuated_mip", attenuation=0.5, 
+            )
+
+        self.viewer.add_image(
+            self.data[0]["ncl_prd"], visible=0,
+            name="ncl_prd", colormap="turbo",
+            blending="translucent_no_depth", opacity=0.5,
             rendering="attenuated_mip", attenuation=0.5, 
             )
         
@@ -665,7 +785,7 @@ class Display:
             
             if c == 1:
             
-                self.viewer.layers["C2_msk_f"].data = (
+                self.viewer.layers["C2_msk_v"].data = (
                     self.data[self.idx]["C2_lbl"] > 0)                
             
             if c < 3: 
@@ -685,8 +805,9 @@ class Display:
         self.viewer.layers["ncl_out"].data = self.data[self.idx]["ncl_out"]
         self.viewer.layers["cyt_out"].data = self.data[self.idx]["cyt_out"]
         
-        # prediction
-        self.viewer.layers["prd"].data = self.data[self.idx]["prd"]
+        # predictions
+        self.viewer.layers["cyt_prd"].data = self.data[self.idx]["cyt_prd"]
+        self.viewer.layers["ncl_prd"].data = self.data[self.idx]["ncl_prd"]
         
         # Adjust viewer
         self.center_view()
@@ -744,4 +865,4 @@ class Display:
 if __name__ == "__main__":
     
     main = Main()
-    display = Display()
+    display = Display()  
