@@ -33,7 +33,6 @@ mapping = {
     "N12"  : "NRP2KO-NRP2-eGFP_dSAB1B2",
     
     # Drugs
-    "Im00" : "none",
     "IM00" : "none",
     "Dr01" : "DMSO",
     "Dr02" : "Dyngo4a",

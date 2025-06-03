@@ -51,7 +51,7 @@ procedure = {
     "predict" : 0,
     "process" : 0,
     "analyse" : 0,
-    "display" : 0,
+    "display" : 1,
     
     }
 
@@ -62,7 +62,7 @@ parameters = {
     # "data_path"      : Path("D:\local_Suzuki\data"),
     "data_path"      : Path(r"\\scopem-idadata.ethz.ch\BDehapiot\remote_Suzuki\data"),
     "model_name_cyt" : "model_512_normal_3000-1179_1_cyt",
-    "model_name_ncl" : "model_512_normal_3000-783_1_ncl",
+    "model_name_ncl" : "model_512_normal_3000-2034_1_ncl",
     "tags"           : ["2OBJ"],
     
     # Parameters
@@ -389,6 +389,7 @@ class Main:
             
             # Append results
             C2_results = {
+                
                 "lbl"         : lbls,
                 "path"        : metadata["path"],
                 "date"        : metadata["date"],
@@ -409,6 +410,7 @@ class Main:
                 "C3_avg"      : get_blobs_int(C2_lbl, data["htk"][:, 2, ...]),
                 "C1_msk_avg"  : get_blobs_int(C2_lbl, data["C1_lbl"] > 0),
                 "C3_msk_avg"  : get_blobs_int(C2_lbl, data["C3_lbl"] > 0),
+                
                 }
             
             # Get valid labels 

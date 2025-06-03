@@ -31,7 +31,7 @@ downscale_factor = 1
 
 # UNet train()
 preview = 0
-load_name = "model_512_normal_3000-1971_1"
+load_name = "model_512_normal_3000-1971_1_ncl"
 
 # preprocess
 patch_size = 512
@@ -56,7 +56,7 @@ learning_rate = 0.001
 patience = 20
 
 # predict
-idx = 80
+idx = 40
 voxsize = 0.2
 
 #%% Initialize ----------------------------------------------------------------
