@@ -1,5 +1,6 @@
 #%% Imports -------------------------------------------------------------------
 
+import numpy as np
 import pandas as pd
 from pathlib import Path
 
@@ -60,16 +61,23 @@ C3_msk_avg
 parameters = {
     
     # Paths
-    # "data_path" : Path("D:\local_Suzuki\data"),
-    "data_path" : Path(r"\\scopem-idadata.ethz.ch\BDehapiot\remote_Suzuki\data"),
-    "tags"      : ["2OBJ"],
+       
+    "rmt_path" : 
+        Path(r"\\scopem-idadata.ethz.ch\BDehapiot\remote_Suzuki\data\\2OBJ"),
+    "loc_path" : 
+        Path("D:\local_Suzuki\data\\2OBJ"),
+        
+    "save" : "loc",
     
     # Parameters
     
     "data_x" : "cyt_edt_avg",
-    "data_y" : "C1_avg",
-    "tags_0" : ["020min", "Dr01", "N00"],
-    "tags_1" : ["020min", "Dr05", "N00"],
+    "data_y" : "C1_msk_avg",
+    "tags_0" : ["000min", "IM00"],
+    "tags_1" : ["020min", "IM00"],
+    
+    # Statistics
+    "error" : "sem",
     
     }
 
@@ -82,6 +90,14 @@ def filter_data(df, name, tags):
         mask = pd.Series(True, index=df.index)
     return df.loc[mask, name]
 
+def stats_data(data, err="sem"):
+    avg = np.mean(data)
+    if err == "std":
+        err = np.std(data)
+    elif err == "sem":
+        err = np.std(data, ddof=1) / np.sqrt(len(data))
+    return avg, err   
+
 #%% Class(Plot) ---------------------------------------------------------------
 
 class Plot:
@@ -89,36 +105,27 @@ class Plot:
     def __init__(self, parameters=parameters):
         
         # Fetch
-        self.data_path = parameters["data_path"]
-        self.tags      = parameters["tags"]
-        self.data_x    = parameters["data_x"]
-        self.data_y    = parameters["data_y"]
-        self.tags_0    = parameters["tags_0"]
-        self.tags_1    = parameters["tags_1"]
+        self.parameters = parameters
+        self.save = self.parameters["save"]
+        self.error = self.parameters["error"]
+        self.data_x = parameters["data_x"]
+        self.data_y = parameters["data_y"]
+        self.tags_0 = parameters["tags_0"]
+        self.tags_1 = parameters["tags_1"]
         
         # Run
-        self.initialize()
         self.load()
         # self.all_vs_valid()
         self.cond0_vs_cond1()
-
-#%% Class(Plot) : initialize() ------------------------------------------------
-
-    def initialize(self):
-
-        if "2OBJ" in self.tags:
-            self.exp = "2OBJ"
-        if "3OBJ" in self.tags:
-            self.exp = "3OBJ"
-        
+       
 #%% Class(Plot) : load() ------------------------------------------------------
 
     def load(self):
-        
+
         self.df_m = pd.read_csv(
-            self.data_path / self.exp / "C2_results_m.csv")
+            self.parameters[f"{self.save}_path"] / "C2_results_m.csv")
         self.df_v_m = pd.read_csv(
-            self.data_path / self.exp / "C2_results_v_m.csv")
+            self.parameters[f"{self.save}_path"] / "C2_results_v_m.csv")
         
 #%% Class(Plot) : all_vs_valid() ----------------------------------------------
 
@@ -129,6 +136,12 @@ class Plot:
         y_m = filter_data(self.df_m, self.data_y, [])
         x_v_m = filter_data(self.df_v_m, self.data_x, [])
         y_v_m = filter_data(self.df_v_m, self.data_y, [])
+        
+        # Statistics
+        x_m_avg, x_m_err = stats_data(x_m, err=self.error)
+        y_m_avg, y_m_err = stats_data(y_m, err=self.error)
+        x_v_m_avg, x_v_m_err = stats_data(x_v_m, err=self.error)
+        y_v_m_avg, y_v_m_err = stats_data(y_v_m, err=self.error)
     
         # Initialize plot
         fig = plt.figure(figsize=(6, 9), layout="tight")
@@ -159,21 +172,23 @@ class Plot:
             fontfamily="Consolas",
             )
         
-        # Box plots
+        # Bar plots
         
-        boxplot_params = {"widths" : 0.6, "showfliers" : False}
+        barplot_params = {"width" : 0.75, "capsize" : 10}
         
-        ax1 = fig.add_subplot(gs[1, 0])
-        ax1.boxplot(y_m, positions=[0], tick_labels=["all"], **boxplot_params)
-        ax1.boxplot(y_v_m, positions=[1], tick_labels=["valid"], **boxplot_params)
-        ax1.set_title(self.data_y)
-        ax1.set_ylabel(self.data_y)   
+        ax1 = fig.add_subplot(gs[1, 0]) 
+        ax1.bar(0, y_m_avg, yerr=y_m_err, **barplot_params)
+        ax1.bar(1, y_v_m_avg, yerr=y_v_m_err, **barplot_params)
+        ax1.set_title(f"{self.data_y} ({self.error})")
+        ax1.set_ylabel(self.data_y)  
+        ax1.set_xticks([0, 1], ["all", "valid"])
         
-        ax2 = fig.add_subplot(gs[1, 1])
-        ax2.boxplot(x_m, positions=[0], tick_labels=["all"], **boxplot_params)
-        ax2.boxplot(x_v_m, positions=[1], tick_labels=["valid"], **boxplot_params)
-        ax2.set_title(self.data_x)
-        ax2.set_ylabel(self.data_x)   
+        ax2 = fig.add_subplot(gs[1, 1]) 
+        ax2.bar(0, x_m_avg, yerr=x_m_err, **barplot_params)
+        ax2.bar(1, x_v_m_avg, yerr=x_v_m_err, **barplot_params)
+        ax2.set_title(f"{self.data_x} ({self.error})")
+        ax2.set_ylabel(self.data_x)  
+        ax2.set_xticks([0, 1], ["all", "valid"])
 
 #%% Class(Plot) : cond0_vs_cond1() --------------------------------------------
 
@@ -184,6 +199,12 @@ class Plot:
         y0_v_m = filter_data(self.df_v_m, self.data_y, self.tags_0)
         x1_v_m = filter_data(self.df_v_m, self.data_x, self.tags_1)
         y1_v_m = filter_data(self.df_v_m, self.data_y, self.tags_1)
+        
+        # Statistics
+        x0_v_m_avg, x0_v_m_err = stats_data(x0_v_m, err=self.error)
+        y0_v_m_avg, y0_v_m_err = stats_data(y0_v_m, err=self.error)
+        x1_v_m_avg, x1_v_m_err = stats_data(x1_v_m, err=self.error)
+        y1_v_m_avg, y1_v_m_err = stats_data(y1_v_m, err=self.error)
         
         # Initialize plot
         fig = plt.figure(figsize=(6, 9), layout="tight")
@@ -215,22 +236,26 @@ class Plot:
             transform=ax0.transAxes, ha="left", va="top", 
             fontfamily="Consolas",
             )
+                
+        # Bar plots
         
-        # Box plots
+        barplot_params = {"width" : 0.75, "capsize" : 10}
         
-        boxplot_params = {"widths" : 0.6, "showfliers" : False}
+        ax1 = fig.add_subplot(gs[1, 0]) 
+        ax1.bar(0, y0_v_m_avg, yerr=y0_v_m_err, **barplot_params)
+        ax1.bar(1, y1_v_m_avg, yerr=y1_v_m_err, **barplot_params)
+        ax1.set_title(f"{self.data_y} ({self.error})")
+        ax1.set_ylabel(self.data_y)  
+        ax1.set_xticks(
+            [0, 1], [f"{'-'.join(self.tags_0)}", f"\n{'-'.join(self.tags_1)}"])
         
-        ax1 = fig.add_subplot(gs[1, 0])
-        ax1.boxplot(y0_v_m, positions=[0], tick_labels=["cond0"], **boxplot_params)
-        ax1.boxplot(y1_v_m, positions=[1], tick_labels=["cond1"], **boxplot_params)
-        ax1.set_title(self.data_y)
-        ax1.set_ylabel(self.data_y)   
-        
-        ax2 = fig.add_subplot(gs[1, 1])
-        ax2.boxplot(x0_v_m, positions=[0], tick_labels=["cond0"], **boxplot_params)
-        ax2.boxplot(x1_v_m, positions=[1], tick_labels=["cond1"], **boxplot_params)
-        ax2.set_title(self.data_x)
+        ax2 = fig.add_subplot(gs[1, 1]) 
+        ax2.bar(0, x0_v_m_avg, yerr=x0_v_m_err, **barplot_params)
+        ax2.bar(1, x1_v_m_avg, yerr=x1_v_m_err, **barplot_params)
+        ax2.set_title(f"{self.data_x} ({self.error})")
         ax2.set_ylabel(self.data_x)  
+        ax2.set_xticks(
+            [0, 1], [f"{'-'.join(self.tags_0)}", f"\n{'-'.join(self.tags_1)}"])
 
 #%% Execute -------------------------------------------------------------------
 

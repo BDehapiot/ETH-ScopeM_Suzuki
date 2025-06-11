@@ -36,11 +36,6 @@ from qtpy.QtWidgets import (
 #%% Comments ------------------------------------------------------------------
 
 '''
-
-- There is error regarding selection of valid C2 objects
-- The current procedure for sorting the blobs does only works for 2obj 
-- The analyse part is not tune to differ from procedure["analyse"] = 1 or 2
-
 '''
 
 #%% Inputs --------------------------------------------------------------------
@@ -53,36 +48,35 @@ procedure = {
     "predict" : 0,
     "process" : 0,
     "analyse" : 0,
-    "display" : 1,
+    "display" : 0,
     
     }
 
 parameters = {
     
     # Paths
-    
-    # "data_path"      : Path("D:\local_Suzuki\data"),
-    "data_path"      : Path(r"\\scopem-idadata.ethz.ch\BDehapiot\remote_Suzuki\data"),
-    "model_name_cyt" : "model_512_normal_3000-1179_1_cyt",
-    "model_name_ncl" : "model_512_normal_3000-2034_1_ncl",
-    "tags"           : ["2OBJ"],
+       
+    "rmt_path" : 
+        Path(r"\\scopem-idadata.ethz.ch\BDehapiot\remote_Suzuki\data\\2OBJ"),
+    "loc_path" : 
+        Path("D:\local_Suzuki\data\\2OBJ"),
+    "model_name_cyt" : 
+        "model_512_normal_3000-1179_1_cyt",
+    "model_name_ncl" : 
+        "model_512_normal_3000-2034_1_ncl",
+        
+    "save" : "loc",
     
     # Parameters
     
-    "voxsize"        : 0.2,
-    "cyt_thresh"     : 0.05, # 0.05
-    "ncl_thresh"     : 0.15, # 0.15
-    "blb_tcoeffs"    : {
-        "2obj"       : [2, 2, 2], # C1, C2, C3
-        "3obj"       : [2, 2, 2], # C1, C2, C3
-                       },
+    "voxsize"     : 0.2,
+    "cyt_thresh"  : 0.05, # 0.05
+    "ncl_thresh"  : 0.15, # 0.15
+    "blb_tcoeffs" : [2, 2, 2], # C1, C2, C3
     
     # Display
     
-    "cmaps"          : {
-        "2obj"       : ["bop orange", "magenta", "green", "blue"],
-        "3obj"       : ["bop orange", "magenta", "green", "blue"],
-                       },
+    "cmaps" : ["bop orange", "magenta", "green", "blue"],
     
     } 
 
@@ -99,9 +93,12 @@ class Main:
         # Fetch
         self.procedure  = procedure
         self.parameters = parameters
+        
+        # Initialize
+        self.save = self.parameters["save"]
+        self.nd2_paths = list(self.parameters["rmt_path"].rglob("*.nd2"))
                 
         # Run
-        self.initialize()
         if self.procedure["extract"]:
             self.extract() 
         if self.procedure["predict"]:
@@ -110,22 +107,7 @@ class Main:
             self.process() 
         if self.procedure["analyse"]:
             self.analyse() 
-        
-#%% Class(Main) : initialize() ------------------------------------------------
-
-    def initialize(self):
-        
-        # Paths
-        paths = list(self.parameters["data_path"].rglob("*.nd2"))
-        self.htk_paths = []
-        for path in paths:
-            if any(tag in path.stem for tag in self.parameters["tags"]):
-                self.htk_paths.append(path)
-        if "2OBJ" in self.parameters["tags"]:
-            self.exp = "2obj"
-        if "3OBJ" in self.parameters["tags"]:
-            self.exp = "3obj"
-                    
+                            
 #%% Class(Main) : extract() ---------------------------------------------------
         
     def extract(self):
@@ -133,7 +115,7 @@ class Main:
         def _extract(path):
             
             # Setup directory
-            out_path = path.parent / path.stem 
+            out_path = self.parameters[f"{self.save}_path"] / path.stem 
             C1_path = out_path / "C1.tif"
             if out_path.exists():
                 if self.procedure["extract"] == 1 and C1_path.exists():
@@ -180,7 +162,7 @@ class Main:
 
         print("extract() : ")
         
-        for path in self.htk_paths:
+        for path in self.nd2_paths:
             _extract(path)
         
 #%% Class(Main) : predict() ---------------------------------------------------
@@ -189,14 +171,15 @@ class Main:
         
         print("predict() : ")
         
-        # Initialize model
+        # Initialize
+        dir_list = self.parameters[f"{self.save}_path"].iterdir()
+        out_paths = [f for f in dir_list if f.is_dir()]
         unet_cyt = UNet(load_name=self.parameters["model_name_cyt"])
         unet_ncl = UNet(load_name=self.parameters["model_name_ncl"])
         
-        for path in self.htk_paths:
+        for out_path in out_paths:
 
             # Load data
-            out_path = path.parent / path.stem
             cyt_prd_path = out_path / "cyt_prd.tif"
             if cyt_prd_path.exists() and self.procedure["predict"] == 1:
             
@@ -205,7 +188,7 @@ class Main:
             else:
                 
                 t0 = time.time()
-                print(f"{path.name} : ", end="", flush=False)
+                print(f"{out_path.name} : ", end="", flush=False)
                 
                 data = load_data(out_path)
                 
@@ -300,10 +283,9 @@ class Main:
             else:
                 return lbl
                         
-        def _process(path):
+        def _process(out_path):
 
             # Load data
-            out_path = path.parent / path.stem
             cyt_msk_path = out_path / "ncl_msk.tif"
         
             if cyt_msk_path.exists() and self.procedure["process"] == 1:
@@ -324,7 +306,7 @@ class Main:
                     blb_lbl = get_blobs(
                         data["htk"][:, c, ...], mask=cyt_msk, 
                         sigma0=1, sigma1=5, 
-                        thresh_coeff=self.parameters["blb_tcoeffs"][self.exp][c]
+                        thresh_coeff=self.parameters["blb_tcoeffs"][c]
                         )
                             
                     # Save
@@ -348,12 +330,16 @@ class Main:
 
         # ---------------------------------------------------------------------
         
+        # Initialize
+        dir_list = self.parameters[f"{self.save}_path"].iterdir()
+        out_paths = [f for f in dir_list if f.is_dir()]
+        
         t0 = time.time()
         print("process() : ", end="", flush=False)
-        
+
         Parallel(n_jobs=-1)(
-            delayed(_process)(path) 
-            for path in self.htk_paths
+            delayed(_process)(out_path) 
+            for out_path in out_paths
             ) 
 
         t1 = time.time()
@@ -375,72 +361,83 @@ class Main:
             else:
                 return sum_img[idx] / counts[idx]
         
-        def _analyse(path):
+        def _analyse(out_path):
             
             # Load data
-            out_path = path.parent / path.stem
-            data = load_data(out_path)
+            C2_lbl_v_path = out_path / "C2_lbl_v.tif"
+        
+            if C2_lbl_v_path.exists() and self.procedure["analyse"] == 1:
             
-            # Initialize
-            C2_lbl = data["C2_lbl"]
-            metadata = data["metadata"]
-            lbls = np.arange(1, np.max(C2_lbl) + 1)
-            cyt_edt = get_edt(data["cyt_msk"], rescale_factor=0.5)
+                return
             
-            metadata = data["metadata"]
-            
-            # Append results
-            C2_results = {
+            else:
                 
-                "lbl"         : lbls,
-                "path"        : metadata["path"],
-                "date"        : metadata["date"],
-                "rep"         : metadata["rep"],
-                "cell"        : metadata["cell"],
-                "time"        : metadata["time"],
-                "C1_name"     : metadata["chn_names"][0],
-                "C2_name"     : metadata["chn_names"][1],
-                "C3_name"     : metadata["chn_names"][2],
-                "C4_name"     : metadata["chn_names"][3],
-                "cond"        : metadata["cond"],
-                "exp"         : metadata["exp"],
-                "count"       : [(C2_lbl == l).sum() for l in lbls],
-                "cyt_edt_avg" : get_blobs_int(C2_lbl, cyt_edt),
-                "ncl_msk_avg" : get_blobs_int(C2_lbl, data["ncl_msk"] > 0),
-                "C1_avg"      : get_blobs_int(C2_lbl, data["htk"][:, 0, ...]),
-                "C2_avg"      : get_blobs_int(C2_lbl, data["htk"][:, 1, ...]),
-                "C3_avg"      : get_blobs_int(C2_lbl, data["htk"][:, 2, ...]),
-                "C1_msk_avg"  : get_blobs_int(C2_lbl, data["C1_lbl"] > 0),
-                "C3_msk_avg"  : get_blobs_int(C2_lbl, data["C3_lbl"] > 0),
+                data = load_data(out_path)
                 
-                }
-            
-            # Get valid labels 
-            lbls_v = lbls[C2_results["C3_msk_avg"] == 0]
-            C2_lbl_v = C2_lbl.copy()
-            C2_lbl_v[np.isin(C2_lbl, lbls_v) == 0] = 0
-            
-            # Save
-            
-            C2_results = pd.DataFrame(C2_results)   
-            C2_results_v = C2_results[C2_results["C3_msk_avg"] == 0]
-            C2_results.to_csv(out_path / "C2_results.csv", index=False)
-            C2_results_v.to_csv(out_path / "C2_results_v.csv", index=False)
-            
-            save_tif(
-                C2_lbl_v.astype("uint16"), 
-                out_path / "C2_lbl_v.tif", 
-                voxsize=data["metadata"]["vsize1"][0],
-                )  
+                # Initialize
+                C2_lbl = data["C2_lbl"]
+                metadata = data["metadata"]
+                lbls = np.arange(1, np.max(C2_lbl) + 1)
+                cyt_edt = get_edt(data["cyt_msk"], rescale_factor=0.5)
+                
+                metadata = data["metadata"]
+                
+                # Append results
+                C2_results = {
                     
+                    "lbl"         : lbls,
+                    "path"        : metadata["path"],
+                    "date"        : metadata["date"],
+                    "rep"         : metadata["rep"],
+                    "cell"        : metadata["cell"],
+                    "time"        : metadata["time"],
+                    "C1_name"     : metadata["chn_names"][0],
+                    "C2_name"     : metadata["chn_names"][1],
+                    "C3_name"     : metadata["chn_names"][2],
+                    "C4_name"     : metadata["chn_names"][3],
+                    "cond"        : metadata["cond"],
+                    "exp"         : metadata["exp"],
+                    "count"       : [(C2_lbl == l).sum() for l in lbls],
+                    "cyt_edt_avg" : get_blobs_int(C2_lbl, cyt_edt),
+                    "ncl_msk_avg" : get_blobs_int(C2_lbl, data["ncl_msk"] > 0),
+                    "C1_avg"      : get_blobs_int(C2_lbl, data["htk"][:, 0, ...]),
+                    "C2_avg"      : get_blobs_int(C2_lbl, data["htk"][:, 1, ...]),
+                    "C3_avg"      : get_blobs_int(C2_lbl, data["htk"][:, 2, ...]),
+                    "C1_msk_avg"  : get_blobs_int(C2_lbl, data["C1_lbl"] > 0),
+                    "C3_msk_avg"  : get_blobs_int(C2_lbl, data["C3_lbl"] > 0),
+                    
+                    }
+                
+                # Get valid labels 
+                lbls_v = lbls[C2_results["C3_msk_avg"] == 0]
+                C2_lbl_v = C2_lbl.copy()
+                C2_lbl_v[~np.isin(C2_lbl_v, lbls_v)] = 0
+                
+                # Save
+                
+                C2_results = pd.DataFrame(C2_results)   
+                C2_results_v = C2_results[C2_results["C3_msk_avg"] == 0]
+                C2_results.to_csv(out_path / "C2_results.csv", index=False)
+                C2_results_v.to_csv(out_path / "C2_results_v.csv", index=False)
+                
+                save_tif(
+                    C2_lbl_v.astype("uint16"), 
+                    out_path / "C2_lbl_v.tif", 
+                    voxsize=data["metadata"]["vsize1"][0],
+                    )  
+                        
         # ---------------------------------------------------------------------
+        
+        # Initialize
+        dir_list = self.parameters[f"{self.save}_path"].iterdir()
+        out_paths = [f for f in dir_list if f.is_dir()]
         
         t0 = time.time()
         print("analyse() : ", end="", flush=False)
                 
         Parallel(n_jobs=-1)(
-            delayed(_analyse)(path) 
-            for path in self.htk_paths
+            delayed(_analyse)(out_path) 
+            for out_path in out_paths
             ) 
                 
         t1 = time.time()
@@ -448,21 +445,23 @@ class Main:
         
         # Merge & save C2_results
         
+        dir_path = self.parameters[f"{self.save}_path"]
+        
         C2_results_m = []
-        for path in list(parameters["data_path"].rglob("*C2_results.csv")):
+        for path in list(dir_path.rglob("*C2_results.csv")):
             C2_results_m.append(pd.read_csv(path))
         C2_results_m = pd.concat(C2_results_m, ignore_index=True)
         C2_results_m.to_csv(
-            parameters["data_path"] / self.exp / "C2_results_m.csv", 
+            dir_path / "C2_results_m.csv", 
             index=False,
             )
         
         C2_results_v_m = []
-        for path in list(parameters["data_path"].rglob("*C2_results_v.csv")):
+        for path in list(dir_path.rglob("*C2_results_v.csv")):
             C2_results_v_m.append(pd.read_csv(path))
         C2_results_v_m = pd.concat(C2_results_v_m, ignore_index=True)
         C2_results_v_m.to_csv(
-            parameters["data_path"] / self.exp / "C2_results_v_m.csv", 
+            dir_path / "C2_results_v_m.csv", 
             index=False,
             )
 
@@ -482,20 +481,19 @@ class Display:
         
         # Initialize
         self.idx = 0
-        if "2OBJ" in self.parameters["tags"]:
-            self.exp = "2obj"
-        if "3OBJ" in self.parameters["tags"]:
-            self.exp = "3obj"
-        
+        self.save = self.parameters["save"]
+        dir_list = self.parameters[f"{self.save}_path"].iterdir()
+        self.out_paths = [f for f in dir_list if f.is_dir()]
+                
         # Run
         if self.procedure["display"]:
-            self.init_data()
+            self.load_data()
             self.init_viewer()
             self.show_masks()
         
-#%% Class(Display) : init_data() ----------------------------------------------
-        
-    def init_data(self):
+#%% Class(Display) : function(s) ----------------------------------------------
+                
+    def load_data(self):
         
         def get_outlines(arr):
             arr = arr > 0
@@ -503,128 +501,25 @@ class Display:
             for img in arr:
                 out.append(binary_dilation(img) ^ img)
             return np.stack(out)
+         
+        self.data = load_data(self.out_paths[self.idx])
+        self.data["cyt_out"] = get_outlines(self.data["cyt_msk"])
+        self.data["ncl_out"] = get_outlines(self.data["ncl_msk"])
+        for c in range(3):
+            self.data[f"C{c + 1}_out"] = get_outlines(
+                self.data[f"C{c + 1}_lbl"] > 0)
         
-        # Paths
-        paths = list(self.parameters["data_path"].rglob("*.nd2"))
-        self.htk_paths = []
-        for path in paths:
-            if any(tag in path.stem for tag in self.parameters["tags"]):
-                self.htk_paths.append(path)
-                
-        # Parameters
-        self.cmaps = self.parameters["cmaps"][self.exp]
-        
-        # Load & format data
-        self.data = []
-        for path in self.htk_paths:
-            out_path = path.parent / path.stem
-            data = load_data(out_path)
-            data["cyt_out"] = get_outlines(data["cyt_msk"])
-            data["ncl_out"] = get_outlines(data["ncl_msk"])
-            for c in range(3):
-                data[f"C{c + 1}_out"] = get_outlines(data[f"C{c + 1}_lbl"] > 0)
-            self.data.append(data)
-                
-#%% Class(Display) : init_viewer() --------------------------------------------                
-
-    def init_viewer(self):
-                
-        # Create viewer
-        self.viewer = napari.Viewer()
-        
-        # Create "hstack" menu
-        self.htk_group_box = QGroupBox("Select hstack")
-        htk_group_layout = QVBoxLayout()
-        self.btn_next_htk = QPushButton("next")
-        self.btn_prev_htk = QPushButton("prev")
-        htk_group_layout.addWidget(self.btn_next_htk)
-        htk_group_layout.addWidget(self.btn_prev_htk)
-        self.htk_group_box.setLayout(htk_group_layout)
-        self.btn_next_htk.clicked.connect(self.next_hstack)
-        self.btn_prev_htk.clicked.connect(self.prev_hstack)
-                
-        # Create "display" menu
-        self.dsp_group_box = QGroupBox("Display")
-        dsp_group_layout = QHBoxLayout()
-        self.rad_masks = QRadioButton("mask")
-        self.rad_cyt_prd = QRadioButton("predict cyt")
-        self.rad_ncl_prd = QRadioButton("predict ncl")
-        self.rad_masks.setChecked(True)
-        dsp_group_layout.addWidget(self.rad_masks)
-        dsp_group_layout.addWidget(self.rad_cyt_prd)
-        dsp_group_layout.addWidget(self.rad_ncl_prd)
-        self.dsp_group_box.setLayout(dsp_group_layout)
-        self.rad_masks.toggled.connect(
-            lambda checked: self.show_masks() if checked else None)
-        self.rad_cyt_prd.toggled.connect(
-            lambda checked: self.show_cyt_prd() if checked else None)
-        self.rad_ncl_prd.toggled.connect(
-            lambda checked: self.show_ncl_prd() if checked else None)
-        
-        # Create "check" menu
-        self.chk_group_box = QGroupBox("Check blobs")
-        chk_group_layout = QHBoxLayout()
-        self.rad_chk_C1b = QRadioButton("C1")
-        self.rad_chk_C2b = QRadioButton("C2")
-        self.rad_chk_C3b = QRadioButton("C3")
-        chk_group_layout.addWidget(self.rad_chk_C1b)
-        chk_group_layout.addWidget(self.rad_chk_C2b)
-        chk_group_layout.addWidget(self.rad_chk_C3b)
-        self.chk_group_box.setLayout(chk_group_layout)
-        self.rad_chk_C1b.toggled.connect(
-            lambda checked: self.show_chk(tag="C1") if checked else None)
-        self.rad_chk_C2b.toggled.connect(
-            lambda checked: self.show_chk(tag="C2") if checked else None)
-        self.rad_chk_C3b.toggled.connect(
-            lambda checked: self.show_chk(tag="C3") if checked else None)
-        
-        # Create texts
-        self.info_path = QLabel()
-        self.info_path.setFont(QFont("Consolas"))
-        self.info_path.setText(self.get_text())
-
-        # Create layout
-        self.layout = QVBoxLayout()
-        self.layout.addWidget(self.htk_group_box)
-        self.layout.addWidget(self.dsp_group_box)
-        self.layout.addWidget(self.chk_group_box)
-        self.layout.addSpacing(10)
-        self.layout.addWidget(self.info_path)
-
-        # Create widget
-        self.widget = QWidget()
-        self.widget.setLayout(self.layout)
-        self.viewer.window.add_dock_widget(
-            self.widget, area="right", name="Painter") 
-        self.init_layers()        
-        
-        # Shortcuts
-        
-        @self.viewer.bind_key("PageDown", overwrite=True)
-        def previous_image_key(viewer):
-            self.prev_hstack()
-        
-        @self.viewer.bind_key("PageUp", overwrite=True)
-        def next_image_key(viewer):
-            self.next_hstack()
-            
-        @self.viewer.bind_key("Backspace", overwrite=True)
-        def toggle_outlines(viewer):
-            self.hide_outlines()
-            yield
-            self.show_outlines()
-                                
     def next_hstack(self):
-        if self.idx < len(self.data) - 1:
+        if self.idx < len(self.out_paths) - 1:
             self.idx += 1
-            self.update_layers()
-            self.update_text()
+            self.load_data()
+            self.update()
             
     def prev_hstack(self):
         if self.idx > 0:
             self.idx -= 1
-            self.update_layers()
-            self.update_text()
+            self.load_data()
+            self.update()
                     
     def center_view(self):
         for name in self.viewer.layers:
@@ -691,16 +586,107 @@ class Display:
             else:
                 self.viewer.layers[name].visible = 0
         self.center_view()
+
+#%% Class(Display) : init_viewer() --------------------------------------------                
+
+    def init_viewer(self):
+        
+        # Create viewer
+        self.viewer = napari.Viewer()
+        
+        # Create "hstack" menu
+        self.htk_group_box = QGroupBox("Select hstack")
+        htk_group_layout = QVBoxLayout()
+        self.btn_next_htk = QPushButton("next")
+        self.btn_prev_htk = QPushButton("prev")
+        htk_group_layout.addWidget(self.btn_next_htk)
+        htk_group_layout.addWidget(self.btn_prev_htk)
+        self.htk_group_box.setLayout(htk_group_layout)
+        self.btn_next_htk.clicked.connect(self.next_hstack)
+        self.btn_prev_htk.clicked.connect(self.prev_hstack)
                 
+        # Create "display" menu
+        self.dsp_group_box = QGroupBox("Display")
+        dsp_group_layout = QHBoxLayout()
+        self.rad_masks = QRadioButton("mask")
+        self.rad_cyt_prd = QRadioButton("predict cyt")
+        self.rad_ncl_prd = QRadioButton("predict ncl")
+        self.rad_masks.setChecked(True)
+        dsp_group_layout.addWidget(self.rad_masks)
+        dsp_group_layout.addWidget(self.rad_cyt_prd)
+        dsp_group_layout.addWidget(self.rad_ncl_prd)
+        self.dsp_group_box.setLayout(dsp_group_layout)
+        self.rad_masks.toggled.connect(
+            lambda checked: self.show_masks() if checked else None)
+        self.rad_cyt_prd.toggled.connect(
+            lambda checked: self.show_cyt_prd() if checked else None)
+        self.rad_ncl_prd.toggled.connect(
+            lambda checked: self.show_ncl_prd() if checked else None)
+        
+        # Create "check" menu
+        self.chk_group_box = QGroupBox("Check blobs")
+        chk_group_layout = QHBoxLayout()
+        self.rad_chk_C1b = QRadioButton("C1")
+        self.rad_chk_C2b = QRadioButton("C2")
+        self.rad_chk_C3b = QRadioButton("C3")
+        chk_group_layout.addWidget(self.rad_chk_C1b)
+        chk_group_layout.addWidget(self.rad_chk_C2b)
+        chk_group_layout.addWidget(self.rad_chk_C3b)
+        self.chk_group_box.setLayout(chk_group_layout)
+        self.rad_chk_C1b.toggled.connect(
+            lambda checked: self.show_chk(tag="C1") if checked else None)
+        self.rad_chk_C2b.toggled.connect(
+            lambda checked: self.show_chk(tag="C2") if checked else None)
+        self.rad_chk_C3b.toggled.connect(
+            lambda checked: self.show_chk(tag="C3") if checked else None)
+                
+        # Create texts
+        self.info_path = QLabel()
+        self.info_path.setFont(QFont("Consolas"))
+        self.info_path.setText(self.get_info())
+
+        # Create layout
+        self.layout = QVBoxLayout()
+        self.layout.addWidget(self.htk_group_box)
+        self.layout.addWidget(self.dsp_group_box)
+        self.layout.addWidget(self.chk_group_box)
+        self.layout.addSpacing(10)
+        self.layout.addWidget(self.info_path)
+
+        # Create widget
+        self.widget = QWidget()
+        self.widget.setLayout(self.layout)
+        self.viewer.window.add_dock_widget(
+            self.widget, area="right", name="Painter")
+        self.init_layers()        
+        
+        # Shortcuts
+        
+        @self.viewer.bind_key("PageDown", overwrite=True)
+        def previous_image_key(viewer):
+            self.prev_hstack()
+        
+        @self.viewer.bind_key("PageUp", overwrite=True)
+        def next_image_key(viewer):
+            self.next_hstack()
+            
+        @self.viewer.bind_key("Backspace", overwrite=True)
+        def toggle_outlines(viewer):
+            self.hide_outlines()
+            yield
+            self.show_outlines()
+                                                
 #%% Class(Display) : init_layers() --------------------------------------------            
 
     def init_layers(self):
         
-        for c in range(self.data[0]["htk"].shape[1]- 1, -1, -1):
+        self.cmaps = self.parameters["cmaps"]
+        
+        for c in range(self.data["htk"].shape[1]- 1, -1, -1):
             
             # htk
             self.viewer.add_image(
-                self.data[0]["htk"][:, c, ...], visible=0,
+                self.data["htk"][:, c, ...], visible=0,
                 name=f"C{c + 1}", colormap=self.cmaps[c], 
                 blending="additive", gamma=0.5, 
                 )
@@ -710,7 +696,7 @@ class Display:
             if c == 1:
                 
                 self.viewer.add_image(
-                    self.data[0]["C2_lbl_v"] > 0, visible=0,
+                    self.data["C2_lbl_v"] > 0, visible=0,
                     name="C2_msk_v", colormap=self.cmaps[c],
                     blending="additive", opacity=0.75, 
                     rendering="attenuated_mip", attenuation=0.5,  
@@ -719,14 +705,14 @@ class Display:
             if c < 3:
                 
                 self.viewer.add_image(
-                    self.data[0][f"C{c + 1}_lbl"] > 0, visible=0,
+                    self.data[f"C{c + 1}_lbl"] > 0, visible=0,
                     name=f"C{c + 1}_msk", colormap=self.cmaps[c],
                     blending="additive", opacity=0.75, 
                     rendering="attenuated_mip", attenuation=0.5,  
                     )
                 
                 self.viewer.add_image(
-                    self.data[0][f"C{c + 1}_out"], visible=0,
+                    self.data[f"C{c + 1}_out"], visible=0,
                     name=f"C{c + 1}_out", colormap="gray",
                     blending="additive", opacity=0.5,  
                     ) 
@@ -734,27 +720,27 @@ class Display:
         # masks
         
         self.viewer.add_image(
-            self.data[0]["ncl_msk"], visible=0,
+            self.data["ncl_msk"], visible=0,
             name="ncl_msk", colormap="blue",
             blending="translucent_no_depth", opacity=0.2,
             rendering="attenuated_mip", attenuation=0.5, 
             )
         
         self.viewer.add_image(
-            self.data[0]["ncl_out"], visible=0,
+            self.data["ncl_out"], visible=0,
             name="ncl_out", colormap="gray",
             blending="additive", opacity=0.2,  
             )
         
         self.viewer.add_image(
-            self.data[0]["cyt_msk"], visible=0,
+            self.data["cyt_msk"], visible=0,
             name="cyt_msk", colormap="gray",
             blending="translucent_no_depth", opacity=0.2,
             rendering="attenuated_mip", attenuation=0.5, 
             )
         
         self.viewer.add_image(
-            self.data[0]["cyt_out"], visible=0,
+            self.data["cyt_out"], visible=0,
             name="cyt_out", colormap="gray",
             blending="additive", opacity=0.2,  
             )
@@ -762,14 +748,14 @@ class Display:
         # predictions
         
         self.viewer.add_image(
-            self.data[0]["cyt_prd"], visible=0,
+            self.data["cyt_prd"], visible=0,
             name="cyt_prd", colormap="turbo",
             blending="translucent_no_depth", opacity=0.5,
             rendering="attenuated_mip", attenuation=0.5, 
             )
 
         self.viewer.add_image(
-            self.data[0]["ncl_prd"], visible=0,
+            self.data["ncl_prd"], visible=0,
             name="ncl_prd", colormap="turbo",
             blending="translucent_no_depth", opacity=0.5,
             rendering="attenuated_mip", attenuation=0.5, 
@@ -779,49 +765,9 @@ class Display:
         self.viewer.dims.ndisplay = 3
         self.center_view()
         
-#%% Class(Display) : update() -------------------------------------------------  
+#%% Class(Display) : get_info() -----------------------------------------------
 
-    def update_layers(self):
-        
-        for c in range(self.data[self.idx]["htk"].shape[1]):
-            
-            # blobs
-            
-            if c == 1:
-            
-                self.viewer.layers["C2_msk_v"].data = (
-                    self.data[self.idx]["C2_lbl"] > 0)                
-            
-            if c < 3: 
-
-                self.viewer.layers[f"C{c + 1}_msk"].data = (
-                    self.data[self.idx][f"C{c + 1}_lbl"] > 0)
-                self.viewer.layers[f"C{c + 1}_out"].data = (
-                    self.data[self.idx][f"C{c + 1}_out"] > 0)
-            
-            # htk
-            self.viewer.layers[f"C{c + 1}"].data = (
-                self.data[self.idx]["htk"][:, c, ...])
-
-        # masks
-        self.viewer.layers["ncl_msk"].data = self.data[self.idx]["ncl_msk"]
-        self.viewer.layers["cyt_msk"].data = self.data[self.idx]["cyt_msk"]
-        self.viewer.layers["ncl_out"].data = self.data[self.idx]["ncl_out"]
-        self.viewer.layers["cyt_out"].data = self.data[self.idx]["cyt_out"]
-        
-        # predictions
-        self.viewer.layers["cyt_prd"].data = self.data[self.idx]["cyt_prd"]
-        self.viewer.layers["ncl_prd"].data = self.data[self.idx]["ncl_prd"]
-        
-        # Adjust viewer
-        self.center_view()
-        
-    def update_text(self):
-        self.info_path.setText(self.get_text())
-
-#%% Class(Display) : get_text() -----------------------------------------------
-
-    def get_text(self):
+    def get_info(self):
         
         def format_tuple(tpl, fmt=".3f", sep=", "):
             fmt_tpl = []
@@ -831,12 +777,12 @@ class Display:
         
         # ---------------------------------------------------------------------
         
-        metadata = self.data[self.idx]['metadata']
+        metadata = self.data['metadata']
         
         # Formatting
         chn_names = [
             f"C{c + 1}   : {metadata['chn_names'][c]}\n"
-            for c in range(self.data[self.idx]["htk"].shape[1])
+            for c in range(self.data["htk"].shape[1])
             ]
         shape0 = format_tuple(metadata["shape0"], fmt="04d")
         shape1 = format_tuple(metadata["shape1"], fmt="04d")
@@ -845,7 +791,7 @@ class Display:
         
         return (
             
-            f"{self.data[self.idx]['metadata']['path'].name}"
+            f"{self.data['metadata']['path'].name}"
             
             "\n\n"
             f"cond : {metadata['cond']}" 
@@ -862,11 +808,51 @@ class Display:
             f"vsize1 = ({vsize1})"
             "\n"
    
-            )
+            )        
+        
+#%% Class(Display) : update() -------------------------------------------------  
+
+    def update(self):
+        
+        
+        for c in range(self.data["htk"].shape[1]):
+            
+            # blobs
+            
+            if c == 1:
+            
+                self.viewer.layers["C2_msk_v"].data = (
+                    self.data["C2_lbl_v"] > 0)                
+            
+            if c < 3: 
+
+                self.viewer.layers[f"C{c + 1}_msk"].data = (
+                    self.data[f"C{c + 1}_lbl"] > 0)
+                self.viewer.layers[f"C{c + 1}_out"].data = (
+                    self.data[f"C{c + 1}_out"] > 0)
+            
+            # htk
+            self.viewer.layers[f"C{c + 1}"].data = (
+                self.data["htk"][:, c, ...])
+
+        # masks
+        self.viewer.layers["ncl_msk"].data = self.data["ncl_msk"]
+        self.viewer.layers["cyt_msk"].data = self.data["cyt_msk"]
+        self.viewer.layers["ncl_out"].data = self.data["ncl_out"]
+        self.viewer.layers["cyt_out"].data = self.data["cyt_out"]
+        
+        # predictions
+        self.viewer.layers["cyt_prd"].data = self.data["cyt_prd"]
+        self.viewer.layers["ncl_prd"].data = self.data["ncl_prd"]
+        
+        # Adjust viewer
+        self.center_view()
+        
+        # Update info
+        self.info_path.setText(self.get_info())
 
 #%% Execute -------------------------------------------------------------------
 
-if __name__ == "__main__":
-    
+if __name__ == "__main__":    
     main = Main()
-    display = Display()  
+    display = Display()
